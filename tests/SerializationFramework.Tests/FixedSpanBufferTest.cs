@@ -4,9 +4,9 @@ namespace SerializationFramework.Tests;
 
 public static partial class MiniSerializer
 {
-    public static byte[] SerializeFixedSpanBuffer<T>(T value)
+    public static byte[] SerializeFixedSpanBuffer<T>(T value, IMiniSerializerProvider serializerProvider)
     {
-        var serializer = DefaultMiniSerializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
 
         Span<byte> buffer = stackalloc byte[1024];
         var writeBuffer = new FixedSpanBuffer(buffer);
@@ -84,7 +84,7 @@ public class FixedSpanBufferTest
     public async Task IntSerializer()
     {
         var expected = 123456789;
-        var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected);
+        var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected, DefaultMiniSerializerProvider.Instance);
         await Assert.That(bytes).IsEquivalentTo(new byte[] { 21, 205, 91, 7 });
     }
 
@@ -92,7 +92,7 @@ public class FixedSpanBufferTest
     public async Task ArraySerializer()
     {
         int[] expected = [1, 10, 100, 1000, 10000];
-        var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected);
+        var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected, DefaultMiniSerializerProvider.Instance);
 
         await Assert.That(bytes).IsEquivalentTo(new byte[]
         {
