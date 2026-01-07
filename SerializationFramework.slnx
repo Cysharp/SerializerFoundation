@@ -1,0 +1,23 @@
+<Solution>
+  <Folder Name="/docs/">
+    <File Path=".editorconfig" />
+    <File Path=".gitignore" />
+    <File Path="Directory.Build.props" />
+    <File Path="exclusion.dic" />
+    <File Path="global.json" />
+    <File Path="Icon.png" />
+    <File Path="LICENSE" />
+    <File Path="opensource.snk" />
+    <File Path="README.md" />
+  </Folder>
+  <Folder Name="/sandbox/">
+    <Project Path="sandbox/Benchmark/Benchmark.csproj" />
+    <Project Path="sandbox/ConsoleApp1/ConsoleApp1.csproj" />
+  </Folder>
+  <Folder Name="/src/">
+    <Project Path="src/SerializationFramework/SerializationFramework.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/SerializationFramework.Tests/SerializationFramework.Tests.csproj" />
+  </Folder>
+</Solution>
