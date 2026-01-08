@@ -8,14 +8,21 @@ public static partial class MiniSerializer
     {
         var serializer = serializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
 
-        Span<byte> buffer = stackalloc byte[1024];
+        Span<byte> buffer = new byte[65536];
         var writeBuffer = new FixedSpanBuffer(buffer);
 
-        serializer.Serialize(ref writeBuffer, value);
+        serializer.Serialize(ref writeBuffer, value, default);
 
         writeBuffer.Flush();
 
         return buffer.Slice(0, (int)writeBuffer.WrittenCount).ToArray();
+    }
+
+    public static T DeserializeFixedSpanBuffer<T>(byte[] data, IMiniSerializerProvider serializerProvider)
+    {
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
+        var readBuffer = new ReadOnlySpanBuffer(data);
+        return serializer.Deserialize(ref readBuffer, default);
     }
 }
 
@@ -103,5 +110,26 @@ public class FixedSpanBufferTest
             232, 3, 0, 0, // 1000
             16, 39, 0, 0  // 10000
         });
+    }
+
+    [Test]
+    public async Task ArraySerializerDeserialize()
+    {
+        {
+            var expected = Enumerable.Range(1, 100).ToArray();
+            var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected, DefaultMiniSerializerProvider.Instance);
+
+            var actual = MiniSerializer.DeserializeFixedSpanBuffer<int[]>(bytes, DefaultMiniSerializerProvider.Instance);
+
+            await Assert.That(actual).IsEquivalentTo(expected);
+        }
+        {
+            var expected = Enumerable.Range(1, 1000).ToArray();
+            var bytes = MiniSerializer.SerializeFixedSpanBuffer(expected, DefaultMiniSerializerProvider.Instance);
+
+            var actual = MiniSerializer.DeserializeFixedSpanBuffer<int[]>(bytes, DefaultMiniSerializerProvider.Instance);
+
+            await Assert.That(actual).IsEquivalentTo(expected);
+        }
     }
 }

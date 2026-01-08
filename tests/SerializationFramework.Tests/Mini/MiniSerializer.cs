@@ -167,12 +167,38 @@ public sealed class ArrayMiniSerializer<TWriteBuffer, TReadBuffer, TSerializer, 
         buffer.Advance(4);
 
         var serializer = elementSerializer;
-        var array = GC.AllocateUninitializedArray<T>(length);
-        for (int i = 0; i < length; i++)
+
+        // for security reasons, limit the maximum length to avoid OOM
+        if (length < 512) // TODO: make configurable(in DeserializationContext)
         {
-            array[i] = serializer.Deserialize(ref buffer, deserializationContext);
+            var array = GC.AllocateUninitializedArray<T>(length);
+            for (int i = 0; i < length; i++)
+            {
+                array[i] = serializer.Deserialize(ref buffer, deserializationContext);
+            }
+            return array;
         }
-        return array;
+        else
+        {
+            // write to temporary buffer(segments) and copy to final array
+            // requires copy-cost but important for safety.
+            using var builder = new SafeArrayBuilder<T>();
+
+            var segment = builder.GetNextSegment();
+            var j = 0;
+            for (int i = 0; i < length; i++)
+            {
+                if (segment.Length == j)
+                {
+                    segment = builder.GetNextSegment();
+                    j = 0;
+                }
+
+                segment[j++] = serializer.Deserialize(ref buffer, deserializationContext);
+            }
+
+            return builder.ToArray(lastSegmentCount: j);
+        }
     }
 }
 
