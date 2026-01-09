@@ -40,6 +40,41 @@ public ref struct FixedSpanBuffer : IWriteBuffer
     }
 }
 
+// TODO:...
+public ref struct ArrayPoolBuffer : IWriteBuffer, IDisposable
+{
+    Span<byte> buffer;
+    int written;
+
+    public long WrittenCount => written;
+
+    public ArrayPoolBuffer(Span<byte> scratchBuffer)
+    {
+        this.buffer = scratchBuffer;
+
+    }
+
+    public void Advance(int bytesConsumed)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Flush()
+    {
+        throw new NotImplementedException();
+    }
+
+    public Span<byte> GetSpan(int sizeHint = 0)
+    {
+        throw new NotImplementedException();
+    }
+
+    public void Dispose()
+    {
+        throw new NotImplementedException();
+    }
+}
+
 //public ref struct BufferWriterWriteBuffer(IBufferWriter<byte> bufferWriter) : IWriteBuffer
 //{
 //    Span<byte> span;
