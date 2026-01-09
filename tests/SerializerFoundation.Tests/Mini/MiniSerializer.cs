@@ -240,24 +240,29 @@ public sealed class StringSerializer<TWriteBuffer, TReadBuffer> : IMiniSerialize
         {
             // write to temporary buffer(segments) and copy to final array
             // requires copy-cost but important for safety.
-            using var builder = new ArrayBuilder<char>();
+            var builder = new ArrayBuilder<char>();
+            try
+            {
+                var segment = builder.GetNextSegment();
 
-            var segment = builder.GetNextSegment();
+                var totalWritten = 0;
 
-            var totalWritten = 0;
-
-            var src = buffer.GetSpan(0); // get current ensured buffer
-
-
-            var isFinalBlock = src.Length + totalWritten >= length;
+                var src = buffer.GetSpan(0); // get current ensured buffer
 
 
-            var status = Utf8.ToUtf16(src, segment, out var bytesRead, out var bytesWritten, isFinalBlock);
-
-            // TODO: loop...
+                var isFinalBlock = src.Length + totalWritten >= length;
 
 
-            return builder.ToString(bytesWritten);
+                var status = Utf8.ToUtf16(src, segment, out var bytesRead, out var bytesWritten, isFinalBlock);
+
+                // TODO: loop...
+                return builder.ToString(bytesWritten);
+
+            }
+            finally
+            {
+                builder.Dispose();
+            }
         }
     }
 }

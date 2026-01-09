@@ -132,7 +132,7 @@ public struct ArrayBuilder<T> : IDisposable
 
 public static class ArrayBuilderExtensions
 {
-    extension(ArrayBuilder<char> arrayBuilder)
+    extension(ref ArrayBuilder<char> arrayBuilder)
     {
         public string ToString(int lastSegmentCount)
         {
@@ -141,10 +141,17 @@ public static class ArrayBuilderExtensions
             var length = arrayBuilder.GetLength(lastSegmentCount);
             if (length == 0) return "";
 
-            return string.Create(length, (self: arrayBuilder, lastSegmentCount), static (span, state) =>
+            // avoid string.Create(Func) struct copy-cost.
+            var str = string.Create(length, (object?)null, static (_, _) => { });
+            unsafe
             {
-                state.self.WriteTo(span, state.lastSegmentCount);
-            });
+                fixed (char* destPointer = str.AsSpan())
+                {
+                    Span<char> dest = new Span<char>(destPointer, length);
+                    arrayBuilder.WriteTo(dest, lastSegmentCount);
+                }
+            }
+            return str;
         }
     }
 }

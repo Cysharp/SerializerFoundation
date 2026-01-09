@@ -26,17 +26,21 @@ public class ArrayBuilderTest
     [Test]
     public async Task BuildString()
     {
-        using var builder = new ArrayBuilder<char>();
+        var builder = new ArrayBuilder<char>();
+        try
+        {
+            var a = builder.GetNextSegment();
+            a[0] = 'a';
+            a[1] = 'b';
+            a[2] = 'c';
 
-        
+            var foo = builder.ToString(3);
 
-        var a = builder.GetNextSegment();
-        a[0] = 'a';
-        a[1] = 'b';
-        a[2] = 'c';
-
-        var foo = builder.ToString(3);
-
-        await Assert.That(foo).IsEqualTo("abc");
+            await Assert.That(foo).IsEqualTo("abc");
+        }
+        finally
+        {
+            builder.Dispose();
+        }
     }
 }

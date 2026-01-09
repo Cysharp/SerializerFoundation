@@ -5,7 +5,12 @@ namespace SerializerFoundation;
 
 public interface IWriteBuffer
 {
-    Span<byte> GetSpan(int byteCount);
+    /// <summary>
+    /// Returns a Span to write to that is at least the requested length (specified by <paramref name="sizeHint"/>).
+    /// If no <paramref name="sizeHint"/> is provided (or it's equal to 0), some non-empty buffer is returned.
+    /// </summary>
+    Span<byte> GetSpan(int sizeHint = 0);
+
     void Advance(int bytesConsumed);
     void Flush();
     long WrittenCount { get; }

@@ -16,9 +16,9 @@ public ref struct FixedSpanBuffer : IWriteBuffer
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<byte> GetSpan(int byteCount)
+    public Span<byte> GetSpan(int sizeHint = 0)
     {
-        if (buffer.Length < byteCount)
+        if (buffer.Length == 0 || buffer.Length < sizeHint)
         {
             Throws.InsufficientSpaceInBuffer();
         }

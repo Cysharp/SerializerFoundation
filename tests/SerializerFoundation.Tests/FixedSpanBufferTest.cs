@@ -1,4 +1,5 @@
 ﻿using SerializerFoundation.Tests.Mini;
+using System.Buffers;
 
 namespace SerializerFoundation.Tests;
 
@@ -79,6 +80,50 @@ public class FixedSpanBufferTest
         try
         {
             span = buffer.GetSpan(59); // ng
+            Assert.Fail("Expected exception was not thrown.");
+        }
+        catch (Exception ex)
+        {
+            await Assert.That(ex).IsTypeOf<InvalidOperationException>();
+        }
+    }
+
+    [Test]
+    public async Task DiallowReturnZero()
+    {
+        var bytes = new byte[100];
+        var buffer = new FixedSpanBuffer(bytes);
+
+        var span = buffer.GetSpan(100);
+        span.Length.IsEqualTo(100);
+
+        buffer.Advance(100);
+
+        try
+        {
+            buffer.GetSpan(); // ng
+            Assert.Fail("Expected exception was not thrown.");
+        }
+        catch (Exception ex)
+        {
+            await Assert.That(ex).IsTypeOf<InvalidOperationException>();
+        }
+    }
+
+    [Test]
+    public async Task DiallowReturnZero2()
+    {
+        var bytes = new byte[100];
+        var buffer = new FixedSpanBuffer(bytes);
+
+        var span = buffer.GetSpan(100);
+        span.Length.IsEqualTo(100);
+
+        buffer.Advance(100);
+
+        try
+        {
+            buffer.GetSpan(1); // ng
             Assert.Fail("Expected exception was not thrown.");
         }
         catch (Exception ex)
