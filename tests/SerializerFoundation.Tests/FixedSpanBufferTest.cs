@@ -7,7 +7,7 @@ public static partial class MiniSerializer
 {
     public static byte[] SerializeFixedSpanBuffer<T>(T value, IMiniSerializerProvider serializerProvider)
     {
-        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadReadBuffer, T>();
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadBuffer, T>();
 
         Span<byte> buffer = new byte[65536];
         var writeBuffer = new FixedSpanWriteBuffer(buffer);
@@ -21,8 +21,8 @@ public static partial class MiniSerializer
 
     public static T DeserializeFixedSpanBuffer<T>(byte[] data, IMiniSerializerProvider serializerProvider)
     {
-        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadReadBuffer, T>();
-        var readBuffer = new ReadOnlySpanReadReadBuffer(data);
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadBuffer, T>();
+        var readBuffer = new ReadOnlySpanReadBuffer(data);
         return serializer.Deserialize(ref readBuffer, default);
     }
 }
