@@ -2,7 +2,7 @@
 
 namespace SerializerFoundation;
 
-public ref struct ArrayPoolBuffer : IWriteBuffer, IDisposable
+public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
 {
     PooledArrays pooledArrays;
     CompletedLengths completedLengths; // [0] = scratch, [1..] = pooled
@@ -25,8 +25,14 @@ public ref struct ArrayPoolBuffer : IWriteBuffer, IDisposable
         }
     }
 
+    [Obsolete("Use scratchBuffer ctor instead.", true)]
+    public ArrayPoolWriteBuffer()
+    {
+
+    }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ArrayPoolBuffer(Span<byte> scratchBuffer)
+    public ArrayPoolWriteBuffer(Span<byte> scratchBuffer)
     {
         this.scratchBuffer = scratchBuffer;
         currentBuffer = scratchBuffer;
