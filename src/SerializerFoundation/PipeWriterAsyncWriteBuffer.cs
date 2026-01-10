@@ -6,34 +6,7 @@ using System.Text;
 namespace SerializerFoundation;
 
 // TODO: not implemented
-
-public ref struct ReadOnlySpanBuffer : IReadBuffer
-{
-    ReadOnlySpan<byte> buffer;
-
-    public ReadOnlySpanBuffer(ReadOnlySpan<byte> buffer)
-    {
-        this.buffer = buffer;
-    }
-
-    public ReadOnlySpan<byte> GetSpan(int byteCount)
-    {
-        if (buffer.Length < byteCount)
-        {
-            throw new InvalidOperationException("Insufficient data in buffer.");
-        }
-
-        return buffer;
-    }
-
-    public void Advance(int bytesConsumed)
-    {
-        buffer = buffer.Slice(bytesConsumed);
-    }
-}
-
-
-public class PipeWriterBuffer(PipeWriter pipeWriter) : IAsyncWriteBuffer
+public class PipeWriterAsyncWriteBuffer(PipeWriter pipeWriter) : IAsyncWriteBuffer
 {
     // Span<byte> buffer;
     Memory<byte> buffer;

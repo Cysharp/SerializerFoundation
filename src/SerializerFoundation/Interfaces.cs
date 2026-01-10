@@ -11,18 +11,23 @@ public interface IWriteBuffer
     /// </summary>
     Span<byte> GetSpan(int sizeHint = 0);
 
-    void Advance(int bytesConsumed);
+    void Advance(int bytesWritten);
     void Flush();
-    long WrittenCount { get; }
+    long BytesWritten { get; }
 }
 
 public interface IReadBuffer
 {
-    ReadOnlySpan<byte> GetSpan(int byteCount);
+    /// <summary>
+    /// Returns a Span to read to that is at least the requested length (specified by <paramref name="sizeHint"/>).
+    /// If no <paramref name="sizeHint"/> is provided (or it's equal to 0), some non-empty buffer is returned.
+    /// </summary>
+    ReadOnlySpan<byte> GetSpan(int sizeHint = 0);
     void Advance(int bytesConsumed);
+    long BytesConsumed { get; }
 }
 
-// TODO: WrittenCount
+// TODO: WrittenCount?
 public interface IAsyncWriteBuffer
 {
     bool TryGetSpan(int byteCount, out Span<byte> span);
@@ -54,7 +59,7 @@ public static class WriteBufferExtensions
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get
             {
-                return checked((int)buffer.WrittenCount);
+                return checked((int)buffer.BytesWritten);
             }
         }
     }

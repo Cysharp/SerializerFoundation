@@ -7,22 +7,22 @@ public static partial class MiniSerializer
 {
     public static byte[] SerializeFixedSpanBuffer<T>(T value, IMiniSerializerProvider serializerProvider)
     {
-        var serializer = serializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadReadBuffer, T>();
 
         Span<byte> buffer = new byte[65536];
-        var writeBuffer = new FixedSpanBuffer(buffer);
+        var writeBuffer = new FixedSpanWriteBuffer(buffer);
 
         serializer.Serialize(ref writeBuffer, value, default);
 
         writeBuffer.Flush();
 
-        return buffer.Slice(0, (int)writeBuffer.WrittenCount).ToArray();
+        return buffer.Slice(0, (int)writeBuffer.BytesWritten).ToArray();
     }
 
     public static T DeserializeFixedSpanBuffer<T>(byte[] data, IMiniSerializerProvider serializerProvider)
     {
-        var serializer = serializerProvider.GetMiniSerializer<FixedSpanBuffer, ReadOnlySpanBuffer, T>();
-        var readBuffer = new ReadOnlySpanBuffer(data);
+        var serializer = serializerProvider.GetMiniSerializer<FixedSpanWriteBuffer, ReadOnlySpanReadReadBuffer, T>();
+        var readBuffer = new ReadOnlySpanReadReadBuffer(data);
         return serializer.Deserialize(ref readBuffer, default);
     }
 }
@@ -33,7 +33,7 @@ public class FixedSpanBufferTest
     public async Task FullUse()
     {
         var bytes = new byte[100];
-        var buffer = new FixedSpanBuffer(bytes);
+        var buffer = new FixedSpanWriteBuffer(bytes);
 
         var span = buffer.GetSpan(1);
         span.Length.IsEqualTo(100);
@@ -42,7 +42,7 @@ public class FixedSpanBufferTest
         span.Length.IsEqualTo(100);
 
         buffer.Advance(8);
-        buffer.WrittenCount.IsEqualTo(8);
+        buffer.BytesWritten.IsEqualTo(8);
 
         span = buffer.GetSpan(20);
         span.Length.IsEqualTo(92);
@@ -50,7 +50,7 @@ public class FixedSpanBufferTest
         span = buffer.GetSpan(92);
         span.Length.IsEqualTo(92);
         buffer.Advance(92);
-        buffer.WrittenCount.IsEqualTo(100);
+        buffer.BytesWritten.IsEqualTo(100);
 
         buffer.Flush(); // no-op
 
@@ -69,10 +69,10 @@ public class FixedSpanBufferTest
     public async Task OverAdvance()
     {
         var bytes = new byte[100];
-        var buffer = new FixedSpanBuffer(bytes);
+        var buffer = new FixedSpanWriteBuffer(bytes);
 
         buffer.Advance(42);
-        buffer.WrittenCount.IsEqualTo(42);
+        buffer.BytesWritten.IsEqualTo(42);
 
         var span = buffer.GetSpan(58); // ok
         span.Length.IsEqualTo(58);
@@ -92,7 +92,7 @@ public class FixedSpanBufferTest
     public async Task DiallowReturnZero()
     {
         var bytes = new byte[100];
-        var buffer = new FixedSpanBuffer(bytes);
+        var buffer = new FixedSpanWriteBuffer(bytes);
 
         var span = buffer.GetSpan(100);
         span.Length.IsEqualTo(100);
@@ -114,7 +114,7 @@ public class FixedSpanBufferTest
     public async Task DiallowReturnZero2()
     {
         var bytes = new byte[100];
-        var buffer = new FixedSpanBuffer(bytes);
+        var buffer = new FixedSpanWriteBuffer(bytes);
 
         var span = buffer.GetSpan(100);
         span.Length.IsEqualTo(100);

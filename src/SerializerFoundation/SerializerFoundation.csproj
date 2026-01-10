@@ -7,4 +7,9 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
   </PropertyGroup>
 
+  <ItemGroup>
+    <Using Include="System.Buffers" />
+    <Using Include="System.Runtime.CompilerServices" />
+  </ItemGroup>
+
 </Project>
