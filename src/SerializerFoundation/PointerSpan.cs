@@ -12,7 +12,7 @@ internal unsafe struct PointerSpan
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => length;
     }
-
+     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public PointerSpan(byte* pointer, int length)
     {

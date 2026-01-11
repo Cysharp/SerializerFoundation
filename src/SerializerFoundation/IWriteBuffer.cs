@@ -16,6 +16,8 @@ public interface IWriteBuffer : IDisposable
 
     void Advance(int bytesWritten);
     long BytesWritten { get; }
+
+    // TODO: need Flush.
 }
 
 public static class WriteBufferExtensions

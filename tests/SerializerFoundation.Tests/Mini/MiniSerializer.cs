@@ -19,6 +19,11 @@ public readonly record struct DeserializationContext
 {
 }
 
+public readonly record struct AsyncSerializationContext
+{
+    public readonly CancellationToken CancellationToken { get; init; }
+}
+
 public interface IMiniSerializer<TWriteBuffer, TReadBuffer, T> : IMiniSerializer
     where TWriteBuffer : struct, IWriteBuffer
 #if NET9_0_OR_GREATER
@@ -32,6 +37,13 @@ public interface IMiniSerializer<TWriteBuffer, TReadBuffer, T> : IMiniSerializer
     void Serialize(ref TWriteBuffer buffer, in T value, in SerializationContext serializationContext);
     T Deserialize(ref TReadBuffer buffer, in DeserializationContext deserializationContext);
 }
+
+public interface IAsyncMiniSerializer<TAsyncWriteBuffer, T>
+    where TAsyncWriteBuffer : IAsyncWriteBuffer
+{
+    ValueTask SerializeAsync(TAsyncWriteBuffer buffer, T value, AsyncSerializationContext serializationContext);
+}
+
 
 public static class MiniSerializerExtensions
 {
@@ -144,6 +156,33 @@ public sealed class IntMiniSerializer<TWriteBuffer, TReadBuffer> : IMiniSerializ
         return value;
     }
 }
+
+public sealed class IntAsyncMiniSerializer<TAsyncWriteBuffer> : IAsyncMiniSerializer<TAsyncWriteBuffer, int>
+    where TAsyncWriteBuffer : IAsyncWriteBuffer
+{
+    public static readonly IntAsyncMiniSerializer<TAsyncWriteBuffer> Default = new();
+
+    public ValueTask SerializeAsync(TAsyncWriteBuffer buffer, int value, AsyncSerializationContext serializationContext)
+    {
+        if (buffer.TryGetSpan(4, out var span))
+        {
+            BinaryPrimitives.WriteInt32LittleEndian(span, value);
+            buffer.Advance(4);
+            return default;
+        }
+
+        return Core(buffer, value, serializationContext.CancellationToken);
+
+        static async ValueTask Core(TAsyncWriteBuffer buffer, int value, CancellationToken cancellationToken)
+        {
+            await buffer.EnsureBufferAsync(4, cancellationToken);
+            buffer.TryGetSpan(4, out var span);
+            BinaryPrimitives.WriteInt32LittleEndian(span, value);
+            buffer.Advance(4);
+        }
+    }
+}
+
 
 public sealed class ArrayMiniSerializer<TWriteBuffer, TReadBuffer, TSerializer, T>(TSerializer elementSerializer) : IMiniSerializer<TWriteBuffer, TReadBuffer, T[]>
     where TWriteBuffer : struct, IWriteBuffer, allows ref struct
