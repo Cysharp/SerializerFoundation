@@ -108,11 +108,30 @@ public struct ArrayBuilder<T> : IDisposable
         nextSegmentIndex = 0;
     }
 
+#if NET9_0_OR_GREATER
+
     [InlineArray(16)]
     internal struct Arrays
     {
         public T[]? values;
     }
+
+#else
+    
+    [StructLayout(LayoutKind.Sequential)]
+    internal struct Arrays
+    {
+        T[]? _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15;
+
+        public ref T[]? this[int index]
+        {
+            [System.Diagnostics.CodeAnalysis.UnscopedRef]
+            [MethodImpl(MethodImplOptions.AggressiveInlining)]
+            get => ref Unsafe.Add(ref _0, index);
+        }
+    }
+
+#endif
 }
 
 public static class ArrayBuilderExtensions
