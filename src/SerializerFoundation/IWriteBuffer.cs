@@ -15,17 +15,21 @@ public interface IWriteBuffer : IDisposable
     ref byte GetReference(int sizeHint = 0);
 
     void Advance(int bytesWritten);
+
     long BytesWritten { get; }
 
-    // TODO: need Flush.
+    void Flush();
 }
 
 public static class WriteBufferExtensions
 {
     extension<TWriteBuffer>(ref TWriteBuffer buffer)
-        where TWriteBuffer : struct, IWriteBuffer, allows ref struct
+        where TWriteBuffer : struct, IWriteBuffer
+#if NET9_0_OR_GREATER
+        , allows ref struct
+#endif
     {
-        public int IntWrittenCount
+        public int IntBytesWritten
         {
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             get

@@ -59,16 +59,4 @@ internal unsafe struct PointerSpan
         this.pointer = pointer + start;
         this.length = length - start;
     }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Advance(int start, int length)
-    {
-        if ((ulong)(uint)start + (ulong)(uint)length > (ulong)(uint)Length)
-        {
-            Throws.ArgumentOutOfRange();
-        }
-
-        this.pointer = pointer + start;
-        this.length = length;
-    }
 }

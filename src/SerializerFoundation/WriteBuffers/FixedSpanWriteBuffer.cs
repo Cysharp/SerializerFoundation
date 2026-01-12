@@ -41,6 +41,10 @@ public ref struct FixedSpanWriteBuffer : IWriteBuffer
         written += bytesWritten;
     }
 
+    public void Flush()
+    {
+    }
+
     public void Dispose()
     {
     }

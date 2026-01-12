@@ -21,7 +21,10 @@ public interface IReadBuffer : IDisposable
 public static class ReadBufferExtensions
 {
     extension<TReadBuffer>(ref TReadBuffer buffer)
-        where TReadBuffer : struct, IReadBuffer, allows ref struct
+        where TReadBuffer : struct, IReadBuffer
+#if NET9_0_OR_GREATER
+        , allows ref struct
+#endif
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public byte Peek()

@@ -1,4 +1,5 @@
 ﻿using System.IO.Pipelines;
+using System.Threading;
 
 namespace SerializerFoundation;
 
@@ -67,9 +68,16 @@ public sealed class PipeWriterAsyncWriteBuffer : IAsyncWriteBuffer
         }
     }
 
-    public ValueTask DisposeAsync() => DisposeAsync(CancellationToken.None);
+    public async ValueTask DisposeAsync()
+    {
+        if (writtenInBuffer > 0)
+        {
+            await pipeWriter.FlushAsync(CancellationToken.None);
+            writtenInBuffer = 0;
+        }
+    }
 
-    public async ValueTask DisposeAsync(CancellationToken cancellationToken)
+    public async ValueTask FlushAsync(CancellationToken cancellationToken)
     {
         try
         {

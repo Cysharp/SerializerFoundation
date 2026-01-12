@@ -39,6 +39,10 @@ public unsafe struct FixedPointerWriteBuffer : IWriteBuffer
         written += bytesWritten;
     }
 
+    public void Flush()
+    {
+    }
+
     public void Dispose()
     {
     }

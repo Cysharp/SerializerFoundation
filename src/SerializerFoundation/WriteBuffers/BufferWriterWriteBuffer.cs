@@ -47,7 +47,7 @@ public ref struct BufferWriterWriteBuffer<TBufferWriter> : IWriteBuffer
         totalWritten += bytesWritten;
     }
 
-    void Flush()
+    public void Flush()
     {
         if (writtenInBuffer > 0)
         {
@@ -122,7 +122,7 @@ public struct InterfaceBufferWriterWriteBuffer : IWriteBuffer
         totalWritten += bytesWritten;
     }
 
-    void Flush()
+    public void Flush()
     {
         if (writtenInBuffer > 0)
         {

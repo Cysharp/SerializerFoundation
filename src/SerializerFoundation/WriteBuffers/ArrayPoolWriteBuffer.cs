@@ -121,6 +121,10 @@ public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
         }
     }
 
+    public void Flush()
+    {
+    }
+
     public void Dispose()
     {
         for (int i = 0; i < pooledCount; i++)
