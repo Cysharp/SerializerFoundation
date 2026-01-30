@@ -28,7 +28,7 @@ public class MemorySliceVsPinPointer
     public void PinPointer()
     {
         // PointerSpan + MemoryHandle
-        using var buffer = new InterfaceBufferWriterWriteBuffer(bufferWriter);
+        using var buffer = new NonRefBufferWriterWriteBuffer(bufferWriter);
         for (int i = 0; i < 1000; i++)
         {
             ref var foo = ref buffer.GetReference(100);
@@ -40,7 +40,7 @@ public class MemorySliceVsPinPointer
     public void PinPointerGetSpan()
     {
         // PointerSpan + MemoryHandle
-        using var buffer = new InterfaceBufferWriterWriteBuffer(bufferWriter);
+        using var buffer = new NonRefBufferWriterWriteBuffer(bufferWriter);
         for (int i = 0; i < 1000; i++)
         {
             var foo = buffer.GetSpan(100);

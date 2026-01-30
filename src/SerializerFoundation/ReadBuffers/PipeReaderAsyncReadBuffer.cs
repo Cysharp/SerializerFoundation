@@ -63,8 +63,9 @@ public struct PipeReaderAsyncReadBuffer : IAsyncReadBuffer
         var readResult = await pipeReader.ReadAtLeastAsync(sizeHint, cancellationToken);
         // TODO: check IsCompleted and result's length satisfy sizeHint?
 
-        var buffer = readResult.Buffer;
-        var memory = buffer.First;
+        sequence = readResult.Buffer;
+        var memory = sequence.First;
+
         if ((uint)memory.Length < (uint)sizeHint)
         {
             if ((uint)sequence.Length < (uint)sizeHint)
