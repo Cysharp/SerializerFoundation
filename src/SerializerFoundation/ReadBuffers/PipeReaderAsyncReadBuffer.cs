@@ -2,7 +2,7 @@
 
 namespace SerializerFoundation;
 
-public struct PipeReaderAsyncReadBuffer : IAsyncReadBuffer
+public class PipeReaderAsyncReadBuffer : IAsyncReadBuffer
 {
     PipeReader pipeReader;
     ReadOnlySequence<byte> sequence;
@@ -103,6 +103,8 @@ public struct PipeReaderAsyncReadBuffer : IAsyncReadBuffer
         {
             ArrayPool<byte>.Shared.Return(tempBuffer);
             tempBuffer = null;
+            buffer = default;
+            bufferHandle.Dispose();
         }
     }
 

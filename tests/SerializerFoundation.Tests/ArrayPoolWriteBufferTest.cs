@@ -109,7 +109,8 @@ public class ArrayPoolWriteBufferTest
 
             // Request more space - should auto-expand from ArrayPool
             var span2 = buffer.GetSpan(100);
-            await Assert.That(span2.Length).IsGreaterThanOrEqualTo(100);
+
+            span2.Length.IsGreaterThanOrEqualTo(100);
 
             buffer.Advance(100);
             buffer.BytesWritten.IsEqualTo(164);
@@ -138,12 +139,12 @@ public class ArrayPoolWriteBufferTest
             buffer.Advance(64);
 
             var result = buffer.ToArray();
-            await Assert.That(result.Length).IsEqualTo(128);
+            result.Length.IsEqualTo(128);
 
             // Verify all data preserved
             for (int i = 0; i < 128; i++)
             {
-                await Assert.That(result[i]).IsEqualTo((byte)i);
+                result[i].IsEqualTo((byte)i);
             }
         }
         finally
@@ -246,7 +247,7 @@ public class ArrayPoolWriteBufferTest
         try
         {
             var span = buffer.GetSpan(0);
-            await Assert.That(span.Length).IsGreaterThan(0);
+            span.Length.IsGreaterThan(0);
         }
         finally
         {

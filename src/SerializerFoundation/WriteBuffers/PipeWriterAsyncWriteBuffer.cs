@@ -2,7 +2,7 @@
 
 namespace SerializerFoundation;
 
-public struct PipeWriterAsyncWriteBuffer : IAsyncWriteBuffer
+public class PipeWriterAsyncWriteBuffer : IAsyncWriteBuffer
 {
     PipeWriter pipeWriter;
     PointerSpan buffer;
@@ -54,6 +54,7 @@ public struct PipeWriterAsyncWriteBuffer : IAsyncWriteBuffer
     {
         if (writtenInBuffer > 0)
         {
+            pipeWriter.Advance(writtenInBuffer);
             await pipeWriter.FlushAsync(cancellationToken);
             writtenInBuffer = 0;
         }

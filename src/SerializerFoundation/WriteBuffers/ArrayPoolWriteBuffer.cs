@@ -39,31 +39,35 @@ public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<byte> GetSpan(int sizeHint = 0)
     {
-        var len = currentBuffer.Length - currentWritten;
-        if (sizeHint > 0 && len >= sizeHint)
+        var remaining = currentBuffer.Length - currentWritten;
+        if (remaining == 0 || (uint)remaining < (uint)sizeHint)
+        {
+            return GetSpanSlow(sizeHint);
+        }
+        else
         {
 #if !NETSTANDARD2_0
             return MemoryMarshal.CreateSpan(
                 ref Unsafe.Add(ref MemoryMarshal.GetReference(currentBuffer), currentWritten),
-                len);
+                remaining);
 #else
-            return currentBuffer.Slice(currentWritten, len);
+            return currentBuffer.Slice(currentWritten, remaining);
 #endif
         }
-
-        return GetSpanSlow(sizeHint);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ref byte GetReference(int sizeHint = 0)
     {
-        var len = currentBuffer.Length - currentWritten;
-        if (sizeHint > 0 && len >= sizeHint)
+        var remaining = currentBuffer.Length - currentWritten;
+        if (remaining == 0 || (uint)remaining < (uint)sizeHint)
+        {
+            return ref MemoryMarshal.GetReference(GetSpanSlow(sizeHint));
+        }
+        else
         {
             return ref Unsafe.Add(ref MemoryMarshal.GetReference(currentBuffer), currentWritten);
         }
-
-        return ref MemoryMarshal.GetReference(GetSpanSlow(sizeHint));
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
@@ -216,7 +220,6 @@ public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
 #endif
 }
 
-
 public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
 {
     PooledArrays pooledArrays;
@@ -251,6 +254,7 @@ public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     public NonRefArrayPoolWriteBuffer(byte* scratchBuffer, int length)
     {
         this.scratchBuffer = new PointerSpan(scratchBuffer, length);
+        this.currentBuffer = this.scratchBuffer;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -280,21 +284,23 @@ public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     {
         if (sizeHint <= 0) sizeHint = 1;
 
-        // finish current segment
-        completedLengths[pooledCount] = currentWritten;
+        if (currentBuffer.Length - currentWritten < sizeHint)
+        {
+            // finish current segment
+            completedLengths[pooledCount] = currentWritten;
 
-        // allocate next segment
-        var minSize = GetMinSegmentSize(pooledCount);
-        var requiredSize = Math.Max(sizeHint, minSize);
-        var newArray = ArrayPool<byte>.Shared.Rent(requiredSize);
-        pooledArrays[pooledCount++] = newArray;
+            // allocate next segment
+            var minSize = GetMinSegmentSize(pooledCount);
+            var requiredSize = Math.Max(sizeHint, minSize);
+            var newArray = ArrayPool<byte>.Shared.Rent(requiredSize);
+            pooledArrays[pooledCount++] = newArray;
 
-        currentBufferHandle.Dispose(); // unpin previous buffer
-        var memory = newArray.AsMemory();
-        currentBufferHandle = memory.Pin();
-        currentBuffer = new PointerSpan((byte*)currentBufferHandle.Pointer, memory.Length);
-        currentWritten = 0;
-
+            currentBufferHandle.Dispose(); // unpin previous buffer
+            var memory = newArray.AsMemory();
+            currentBufferHandle = memory.Pin();
+            currentBuffer = new PointerSpan((byte*)currentBufferHandle.Pointer, memory.Length);
+            currentWritten = 0;
+        }
         return currentBuffer;
     }
 
@@ -321,7 +327,7 @@ public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
         var scratchLen = pooledCount > 0 ? completedLengths[0] : currentWritten;
         if (scratchLen > 0)
         {
-            scratchBuffer.GetRewindedSpan(scratchLen).CopyTo(destination);
+            scratchBuffer.AsSpan(0, scratchLen).CopyTo(destination);
             destination = destination.Slice(scratchLen);
         }
 

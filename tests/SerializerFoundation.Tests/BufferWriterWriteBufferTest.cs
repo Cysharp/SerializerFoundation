@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 
 namespace SerializerFoundation.Tests;
 
@@ -17,7 +17,7 @@ public class BufferWriterWriteBufferTest
             span[0] = 0xAB;
             buffer.Advance(10);
 
-            await Assert.That(buffer.BytesWritten).IsEqualTo(10);
+            buffer.BytesWritten.IsEqualTo(10);
         }
         finally
         {
@@ -36,7 +36,7 @@ public class BufferWriterWriteBufferTest
             reference = 0xCD;
             buffer.Advance(1);
 
-            await Assert.That(buffer.BytesWritten).IsEqualTo(1);
+            buffer.BytesWritten.IsEqualTo(1);
         }
         finally
         {
@@ -51,7 +51,7 @@ public class BufferWriterWriteBufferTest
         var buffer = new BufferWriterWriteBuffer<ArrayBufferWriter<byte>>(ref writer);
         try
         {
-            await Assert.That(buffer.BytesWritten).IsEqualTo(0);
+            buffer.BytesWritten.IsEqualTo(0);
         }
         finally
         {
@@ -76,7 +76,7 @@ public class BufferWriterWriteBufferTest
         buffer.Flush();
 
         // After flush, underlying writer should have the data
-        await Assert.That(writer.WrittenCount).IsEqualTo(4);
+        (writer.WrittenCount).IsEqualTo(4);
 
         buffer.Dispose();
     }
@@ -97,8 +97,8 @@ public class BufferWriterWriteBufferTest
         buffer.Dispose();
 
         // After dispose, data should be flushed to underlying writer
-        await Assert.That(writer.WrittenCount).IsEqualTo(4);
-        await Assert.That(writer.WrittenSpan.ToArray()).IsEquivalentTo(new byte[] { 10, 20, 30, 40 });
+        (writer.WrittenCount).IsEqualTo(4);
+        (writer.WrittenSpan.ToArray()).IsEquivalentTo(new byte[] { 10, 20, 30, 40 });
     }
 
     [Test]
@@ -115,7 +115,7 @@ public class BufferWriterWriteBufferTest
                 buffer.Advance(1);
             }
 
-            await Assert.That(buffer.BytesWritten).IsEqualTo(10);
+            (buffer.BytesWritten).IsEqualTo(10);
         }
         finally
         {
@@ -139,7 +139,7 @@ public class NonRefBufferWriterWriteBufferTest
             span[0] = 0xAB;
             buffer.Advance(10);
 
-            await Assert.That(buffer.BytesWritten).IsEqualTo(10);
+            (buffer.BytesWritten).IsEqualTo(10);
         }
         finally
         {

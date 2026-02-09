@@ -105,6 +105,7 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
         {
             ArrayPool<byte>.Shared.Return(tempBuffer);
             tempBuffer = null;
+            currentSpan = default;
         }
     }
 
@@ -180,7 +181,6 @@ public unsafe struct NonRefReadOnlySequenceReadBuffer : IReadBuffer
                 Throws.InsufficientSpaceInBuffer();
             }
 
-            currentSpanHandle.Dispose();
             SetSpan(sequence.First);
         }
 
@@ -231,6 +231,8 @@ public unsafe struct NonRefReadOnlySequenceReadBuffer : IReadBuffer
         {
             ArrayPool<byte>.Shared.Return(tempBuffer);
             tempBuffer = null;
+            currentSpan = default;
+            currentSpanHandle.Dispose();
         }
     }
 

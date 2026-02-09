@@ -33,6 +33,18 @@ internal unsafe struct PointerSpan
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<byte> AsSpan(int start)
+    {
+        return new Span<byte>(pointer + start, length - start);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public Span<byte> AsSpan(int start, int length)
+    {
+        return new Span<byte>(pointer + start, length);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpan<byte> AsReadOnlySpan()
     {
         return new ReadOnlySpan<byte>(pointer, length);
@@ -58,11 +70,5 @@ internal unsafe struct PointerSpan
 
         this.pointer = pointer + start;
         this.length = length - start;
-    }
-
-    internal ReadOnlySpan<byte> GetRewindedSpan(int rewindLength)
-    {
-        var p = this.pointer - rewindLength;
-        return new ReadOnlySpan<byte>(p, rewindLength);
     }
 }

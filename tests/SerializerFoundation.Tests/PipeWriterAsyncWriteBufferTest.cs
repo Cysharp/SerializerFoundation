@@ -59,8 +59,8 @@ public class PipeWriterAsyncWriteBufferTest
         await buffer.EnsureBufferAsync(10, CancellationToken.None);
 
         var result = buffer.TryGetSpan(10, out var span);
-        await Assert.That(result).IsTrue();
-        await Assert.That(span.Length).IsGreaterThanOrEqualTo(10);
+        (result).IsEqualTo(true);
+        span.Length.IsGreaterThanOrEqualTo(10);
 
         await buffer.DisposeAsync();
         await pipe.Writer.CompleteAsync();
@@ -161,8 +161,8 @@ public class PipeReaderAsyncReadBufferTest
         await buffer.EnsureBufferAsync(5, CancellationToken.None);
 
         buffer.TryGetSpan(5, out var span);
-        await Assert.That(span[0]).IsEqualTo((byte)1);
-        await Assert.That(span[1]).IsEqualTo((byte)2);
+        (span[0]).IsEqualTo((byte)1);
+        (span[1]).IsEqualTo((byte)2);
 
         buffer.Advance(2);
         await Assert.That(buffer.BytesConsumed).IsEqualTo(2);
@@ -197,8 +197,8 @@ public class PipeReaderAsyncReadBufferTest
         await buffer.EnsureBufferAsync(10, CancellationToken.None);
 
         var result = buffer.TryGetSpan(10, out var span);
-        await Assert.That(result).IsTrue();
-        await Assert.That(span.Length).IsGreaterThanOrEqualTo(10);
+        (result).IsEqualTo(true);
+        (span.Length).IsGreaterThanOrEqualTo(10);
 
         await buffer.DisposeAsync();
         await pipeReader.CompleteAsync();

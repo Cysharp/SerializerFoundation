@@ -1,4 +1,4 @@
-using System.Buffers;
+﻿using System.Buffers;
 
 namespace SerializerFoundation.Tests;
 
@@ -116,7 +116,7 @@ public class NonRefArrayPoolWriteBufferTest
                     buffer.Advance(4);
 
                     var result = buffer.ToArray();
-                    await Assert.That(result).IsEquivalentTo(new byte[] { 1, 2, 3, 4 });
+                    (result).IsEquivalentTo(new byte[] { 1, 2, 3, 4 });
                 }
                 finally
                 {

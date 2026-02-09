@@ -1,6 +1,4 @@
-﻿using System.Collections.ObjectModel;
-
-namespace SerializerFoundation;
+﻿namespace SerializerFoundation;
 
 // non ref-struct variation -> PointerReadBuffer
 

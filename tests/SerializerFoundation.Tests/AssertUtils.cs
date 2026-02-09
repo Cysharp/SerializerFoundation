@@ -19,6 +19,27 @@ public static class AssertUtils
                 await Assert.That(actual).IsEqualTo(expected, expectedExpression!);
             }
         }
+
+        public void IsTypeOf<TExpected>()
+        {
+            Core(actual).GetAwaiter().GetResult();
+
+            static async ValueTask Core(T actual)
+            {
+                await Assert.That(actual).IsTypeOf<TExpected>();
+            }
+        }
+    }
+
+    public static void IsGreaterThan<TValue>(this TValue actual, TValue minimum, [CallerArgumentExpression(nameof(minimum))] string? minimumExpression = null)
+        where TValue : System.IComparable<TValue>
+    {
+        Core(actual, minimum, minimumExpression).GetAwaiter().GetResult();
+
+        static async ValueTask Core(TValue actual, TValue minimum, string? minimumExpression)
+        {
+            await Assert.That(actual).IsGreaterThan(minimum, minimumExpression!);
+        }
     }
 
     public static void IsGreaterThanOrEqualTo<TValue>(this TValue actual, TValue minimum, [CallerArgumentExpression(nameof(minimum))] string? minimumExpression = null)
