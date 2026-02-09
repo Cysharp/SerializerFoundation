@@ -50,6 +50,9 @@ public class PipeWriterAsyncWriteBuffer : IAsyncWriteBuffer
         totalWritten += bytesWritten;
     }
 
+#if NET8_0_OR_GREATER
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
     public async ValueTask EnsureBufferAsync(int sizeHint, CancellationToken cancellationToken)
     {
         if (writtenInBuffer > 0)

@@ -52,6 +52,9 @@ public class PipeReaderAsyncReadBuffer : IAsyncReadBuffer
         totalConsumed += bytesConsumed;
     }
 
+#if NET8_0_OR_GREATER
+    [AsyncMethodBuilder(typeof(PoolingAsyncValueTaskMethodBuilder))]
+#endif
     public async ValueTask EnsureBufferAsync(int sizeHint, CancellationToken cancellationToken)
     {
         ReturnTempBuffer();
