@@ -80,9 +80,10 @@ public ref struct BufferWriterWriteBuffer<TBufferWriter> : IWriteBuffer
 
 #endif
 
-public struct NonRefBufferWriterWriteBuffer : IWriteBuffer
+public struct NonRefBufferWriterWriteBuffer<TBufferWriter> : IWriteBuffer
+    where TBufferWriter : class, IBufferWriter<byte>
 {
-    IBufferWriter<byte> bufferWriter;
+    TBufferWriter bufferWriter;
     PointerSpan buffer;
     MemoryHandle bufferHandle;
     int writtenInBuffer;
@@ -91,7 +92,7 @@ public struct NonRefBufferWriterWriteBuffer : IWriteBuffer
     public long BytesWritten => totalWritten;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public NonRefBufferWriterWriteBuffer(IBufferWriter<byte> bufferWriter)
+    public NonRefBufferWriterWriteBuffer(TBufferWriter bufferWriter) // copy so only allows class
     {
         this.bufferWriter = bufferWriter;
     }

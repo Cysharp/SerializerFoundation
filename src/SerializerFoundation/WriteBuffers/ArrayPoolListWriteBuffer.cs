@@ -275,6 +275,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             segment = default;
             return false;
         }
+
+        public void Reset()
+        {
+            index = -1;
+        }
     }
 }
 
@@ -544,6 +549,11 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 
             segment = default;
             return false;
+        }
+
+        public void Reset()
+        {
+            index = -1;
         }
     }
 }
