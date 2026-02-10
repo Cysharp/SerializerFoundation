@@ -1,6 +1,6 @@
 ﻿namespace SerializerFoundation;
 
-public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
+public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 {
     PooledArrays pooledArrays;
     CompletedLengths completedLengths; // [0] = scratch, [1..] = pooled
@@ -24,13 +24,13 @@ public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     }
 
     [Obsolete("Use scratchBuffer ctor instead.", true)]
-    public ArrayPoolWriteBuffer()
+    public ArrayPoolListWriteBuffer()
     {
 
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ArrayPoolWriteBuffer(Span<byte> scratchBuffer)
+    public ArrayPoolListWriteBuffer(Span<byte> scratchBuffer)
     {
         this.scratchBuffer = scratchBuffer;
         currentBuffer = scratchBuffer;
@@ -218,9 +218,67 @@ public ref struct ArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     }
 
 #endif
+
+    // iterator
+
+    public WrittenSegmentIterator GetWrittenSegments()
+    {
+        return new WrittenSegmentIterator(ref this);
+    }
+
+    public ref struct WrittenSegmentIterator
+    {
+        readonly Span<byte> scratchBuffer;
+        readonly PooledArrays pooledArrays;
+        readonly CompletedLengths completedLengths;
+        readonly int pooledCount;
+        readonly int currentWritten;
+        int index;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal WrittenSegmentIterator(scoped ref ArrayPoolListWriteBuffer buffer)
+        {
+            this.scratchBuffer = buffer.scratchBuffer;
+            this.pooledArrays = buffer.pooledArrays;
+            this.completedLengths = buffer.completedLengths;
+            this.pooledCount = buffer.pooledCount;
+            this.currentWritten = buffer.currentWritten;
+            this.index = -1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGetNext(out ReadOnlySpan<byte> segment)
+        {
+            index++;
+
+            if (index == 0)
+            {
+                var len = pooledCount > 0 ? completedLengths[0] : currentWritten;
+                if (len > 0)
+                {
+                    segment = scratchBuffer.Slice(0, len);
+                    return true;
+                }
+                index++;
+            }
+
+            if ((uint)(index - 1) < (uint)pooledCount)
+            {
+                var pooledIndex = index - 1;
+                var len = pooledIndex < pooledCount - 1
+                    ? completedLengths[pooledIndex + 1]
+                    : currentWritten;
+                segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
+                return true;
+            }
+
+            segment = default;
+            return false;
+        }
+    }
 }
 
-public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
+public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 {
     PooledArrays pooledArrays;
     CompletedLengths completedLengths; // [0] = scratch, [1..] = pooled
@@ -245,13 +303,13 @@ public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     }
 
     [Obsolete("Use scratchBuffer ctor instead.", true)]
-    public NonRefArrayPoolWriteBuffer()
+    public NonRefArrayPoolListWriteBuffer()
     {
 
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public NonRefArrayPoolWriteBuffer(byte* scratchBuffer, int length)
+    public NonRefArrayPoolListWriteBuffer(byte* scratchBuffer, int length)
     {
         this.scratchBuffer = new PointerSpan(scratchBuffer, length);
         this.currentBuffer = this.scratchBuffer;
@@ -431,4 +489,61 @@ public unsafe struct NonRefArrayPoolWriteBuffer : IWriteBuffer, IDisposable
     }
 
 #endif
+
+    // iterator
+    public WrittenSegmentIterator GetWrittenSegments()
+    {
+        return new WrittenSegmentIterator(ref this);
+    }
+
+    public ref struct WrittenSegmentIterator
+    {
+        readonly PointerSpan scratchBuffer;
+        readonly PooledArrays pooledArrays;
+        readonly CompletedLengths completedLengths;
+        readonly int pooledCount;
+        readonly int currentWritten;
+        int index;
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        internal WrittenSegmentIterator(scoped ref NonRefArrayPoolListWriteBuffer buffer)
+        {
+            this.scratchBuffer = buffer.scratchBuffer;
+            this.pooledArrays = buffer.pooledArrays;
+            this.completedLengths = buffer.completedLengths;
+            this.pooledCount = buffer.pooledCount;
+            this.currentWritten = buffer.currentWritten;
+            this.index = -1;
+        }
+
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        public bool TryGetNext(out ReadOnlySpan<byte> segment)
+        {
+            index++;
+
+            if (index == 0)
+            {
+                var len = pooledCount > 0 ? completedLengths[0] : currentWritten;
+                if (len > 0)
+                {
+                    segment = scratchBuffer.AsSpan(0, len);
+                    return true;
+                }
+                index++;
+            }
+
+            if ((uint)(index - 1) < (uint)pooledCount)
+            {
+                var pooledIndex = index - 1;
+                var len = pooledIndex < pooledCount - 1
+                    ? completedLengths[pooledIndex + 1]
+                    : currentWritten;
+                segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
+                return true;
+            }
+
+            segment = default;
+            return false;
+        }
+    }
 }

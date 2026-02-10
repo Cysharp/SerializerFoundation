@@ -2,13 +2,13 @@
 
 namespace SerializerFoundation.Tests;
 
-public class ArrayPoolWriteBufferTest
+public class ArrayPoolListWriteBufferTest
 {
     [Test]
     public void Basic_WriteAndAdvance()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             var span = buffer.GetSpan(10);
@@ -27,7 +27,7 @@ public class ArrayPoolWriteBufferTest
     public void GetReference_Basic()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             ref byte reference = ref buffer.GetReference(1);
@@ -46,7 +46,7 @@ public class ArrayPoolWriteBufferTest
     public void BytesWritten_InitiallyZero()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             buffer.BytesWritten.IsEqualTo(0);
@@ -61,7 +61,7 @@ public class ArrayPoolWriteBufferTest
     public void ToArray_EmptyBuffer()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             var result = buffer.ToArray();
@@ -77,7 +77,7 @@ public class ArrayPoolWriteBufferTest
     public void ToArray_WithData()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             var span = buffer.GetSpan(4);
@@ -100,7 +100,7 @@ public class ArrayPoolWriteBufferTest
     public async Task AutoExpand_ExceedsScratchBuffer()
     {
         Span<byte> scratch = stackalloc byte[64]; // Small scratch buffer
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             // Fill scratch buffer
@@ -125,7 +125,7 @@ public class ArrayPoolWriteBufferTest
     public async Task AutoExpand_ToArray_PreservesAllData()
     {
         Span<byte> scratch = stackalloc byte[64];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             // Write to scratch buffer
@@ -157,7 +157,7 @@ public class ArrayPoolWriteBufferTest
     public void WriteTo_Destination()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             var span = buffer.GetSpan(4);
@@ -185,7 +185,7 @@ public class ArrayPoolWriteBufferTest
     public void MultipleSegments_LargeWrite()
     {
         Span<byte> scratch = stackalloc byte[32];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             // Write across multiple segments
@@ -213,7 +213,7 @@ public class ArrayPoolWriteBufferTest
     public void Dispose_CanBeCalledMultipleTimes()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
 
         buffer.GetSpan(100);
         buffer.Advance(100);
@@ -226,7 +226,7 @@ public class ArrayPoolWriteBufferTest
     public void Flush_DoesNotThrow()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             buffer.GetSpan(10);
@@ -243,7 +243,7 @@ public class ArrayPoolWriteBufferTest
     public async Task SizeHint_Zero_ReturnsNonEmptyBuffer()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             var span = buffer.GetSpan(0);
@@ -259,7 +259,7 @@ public class ArrayPoolWriteBufferTest
     public void IntBytesWritten_Extension()
     {
         Span<byte> scratch = stackalloc byte[256];
-        var buffer = new ArrayPoolWriteBuffer(scratch);
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
         try
         {
             buffer.Advance(42);
@@ -268,6 +268,67 @@ public class ArrayPoolWriteBufferTest
         finally
         {
             buffer.Dispose();
+        }
+    }
+
+    [Test]
+    public void Iterate()
+    {
+        Span<byte> scratch = stackalloc byte[256];
+        var buffer = new ArrayPoolListWriteBuffer(scratch);
+
+        buffer.GetSpan(100);
+        buffer.Advance(100);
+
+        buffer.GetSpan(1000);
+        buffer.Advance(1000);
+
+        buffer.GetSpan(10000);
+        buffer.Advance(10000);
+
+        buffer.GetSpan(100000);
+        buffer.Advance(100000);
+
+        var len = 0;
+        var segments = buffer.GetWrittenSegments();
+        while (segments.TryGetNext(out var segment))
+        {
+            // Process each segment
+            len += segment.Length;
+        }
+
+        len.IsEqualTo(buffer.IntBytesWritten);
+    }
+
+    [Test]
+    public unsafe void Iterate2()
+    {
+        Span<byte> scratch = stackalloc byte[256];
+        fixed (byte* p = scratch)
+        {
+            var buffer = new NonRefArrayPoolListWriteBuffer(p, scratch.Length);
+
+            buffer.GetSpan(100);
+            buffer.Advance(100);
+
+            buffer.GetSpan(1000);
+            buffer.Advance(1000);
+
+            buffer.GetSpan(10000);
+            buffer.Advance(10000);
+
+            buffer.GetSpan(100000);
+            buffer.Advance(100000);
+
+            var len = 0;
+            var segments = buffer.GetWrittenSegments();
+            while (segments.TryGetNext(out var segment))
+            {
+                // Process each segment
+                len += segment.Length;
+            }
+
+            len.IsEqualTo(buffer.IntBytesWritten);
         }
     }
 }

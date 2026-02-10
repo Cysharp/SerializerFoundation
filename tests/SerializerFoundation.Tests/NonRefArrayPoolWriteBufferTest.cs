@@ -12,7 +12,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     var span = buffer.GetSpan(10);
@@ -37,7 +37,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     ref byte reference = ref buffer.GetReference(1);
@@ -62,7 +62,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     buffer.BytesWritten.IsEqualTo(0);
@@ -83,7 +83,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     var result = buffer.ToArray();
@@ -105,7 +105,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     var span = buffer.GetSpan(4);
@@ -134,7 +134,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     // Fill scratch buffer
@@ -164,7 +164,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
 
                 buffer.GetSpan(100);
                 buffer.Advance(100);
@@ -183,7 +183,7 @@ public class NonRefArrayPoolWriteBufferTest
         {
             fixed (byte* ptr = scratch)
             {
-                var buffer = new NonRefArrayPoolWriteBuffer(ptr, scratch.Length);
+                var buffer = new NonRefArrayPoolListWriteBuffer(ptr, scratch.Length);
                 try
                 {
                     buffer.GetSpan(10);
