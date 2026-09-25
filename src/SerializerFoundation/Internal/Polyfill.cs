@@ -1,16 +1,7 @@
-﻿namespace SerializerFoundation;
+namespace SerializerFoundation;
 
 internal static class Polyfill
 {
-    extension(String)
-    {
-#if NET8_0_OR_GREATER
-        internal static string FastAllocateString(int length) => string.Create(length, (object?)null, static (_, _) => { });
-#else
-        internal static string FastAllocateString(int length) => new string('\0', length);
-#endif
-    }
-
 #if !NET9_0_OR_GREATER
 
     extension(GC)
@@ -24,6 +15,17 @@ internal static class Polyfill
     extension(Array)
     {
         internal static int MaxLength => 0X7FFFFFC7;
+    }
+
+    extension(ArgumentNullException)
+    {
+        internal static void ThrowIfNull(object? argument, [CallerArgumentExpression(nameof(argument))] string? paramName = null)
+        {
+            if (argument is null)
+            {
+                Throws.ArgumentNull(paramName);
+            }
+        }
     }
 
 #if NETSTANDARD2_0
