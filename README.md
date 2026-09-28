@@ -380,6 +380,28 @@ public static unsafe T Deserialize<T>(ReadOnlySpan<byte> source)
 
 `BufferSegments` is the same type on every target, so message processors (compressors, encryptors, framers) that consume it multi-target without any `#if`.
 
+Custom IWriteBuffer / IReadBuffer Implementations
+---
+Beyond the built-in `IWriteBuffer` / `IReadBuffer` implementations, you can provide your own specialized buffer by implementing the interfaces yourself. Follow the contract of each member below. Implementations must be structs (`ref struct` allowed) and are single-owner: they are passed by `ref` and never copied. `Dispose` releases only what the buffer itself rented or staged, never caller-provided scratch, input memory or the underlying writer.
+
+| `IWriteBuffer` | Contract |
+| --- | --- |
+| `BytesWritten` | Total bytes committed through `Advance`. |
+| `GetSpan(sizeHint)` | A writable span of at least `sizeHint` bytes; `0` returns some non-empty span; negative throws `ArgumentOutOfRangeException`. Valid until the next `GetSpan`, `Flush` or `Dispose`. |
+| `Advance(bytesWritten)` | Commits the leading bytes of the last span; negative or beyond the span throws `InvalidOperationException`. The rest of the span stays writable. |
+| `Flush()` | Pushes buffered bytes to the destination when there is one; otherwise a no-op. May invalidate a held span. |
+| `Dispose()` | Commits or releases the buffer's own state. Called once by the owner. |
+
+| `IReadBuffer` | Contract |
+| --- | --- |
+| `BytesConsumed` | Total bytes consumed through `Advance`. |
+| `BytesRemaining` | Unread bytes left in the data. |
+| `GetUnreadSpan()` | The unread part of the current contiguous window, any size. Empty only when the data is exhausted; a segmented source repositions onto the next non-empty segment. Never throws, never consumes. Valid until the next `GetUnreadSpan`, `TryGetSpan` or `Dispose`. |
+| `TryGetSpan(sizeHint, out span)` | A contiguous window of at least `sizeHint` bytes, copying across seams as needed, or `false` when fewer remain; `0` always succeeds; negative throws `ArgumentOutOfRangeException`. Never consumes. Same lifetime as `GetUnreadSpan`; a stitched window lives in temporary storage the next request reuses. |
+| `Advance(bytesConsumed)` | Consumes bytes; negative or beyond `BytesRemaining` throws `InvalidOperationException`. Does not invalidate a held span. |
+| `CopyTo(destination)` | Copies the next `destination.Length` bytes without consuming them; longer than `BytesRemaining` throws `InvalidOperationException`. Multi-segment sources copy straight from their segments. |
+| `Dispose()` | Releases temporary storage the buffer rented. Called once by the owner. |
+
 RequireOverride
 ---
 When a multi-targeted base class adds a generic buffer method only on its net9.0 target, making that method `abstract` would break subclasses compiled against its netstandard target: they have no implementation of the new abstract method. A `virtual` method with a bridge body keeps those subclasses usable, while newly compiled subclasses can override it with a direct implementation.
