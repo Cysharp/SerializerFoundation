@@ -3,7 +3,7 @@ using System.Buffers;
 namespace SerializerFoundation.Tests;
 
 // The fallback tier is the downlevel serializer's buffer set, but the types are plain
-// structs that run on net10.0 too — so CompatibleBufferWriterWriteBuffer (pin-free
+// structs that run on net9.0+ too — so CompatibleBufferWriterWriteBuffer (pin-free
 // Memory<byte> window, dropped on every Flush) gets real runtime coverage here instead
 // of only compile coverage from the netstandard builds.
 public class CompatibleBufferWriterWriteBufferTest

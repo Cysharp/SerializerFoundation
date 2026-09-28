@@ -4,7 +4,7 @@ using System.Runtime.CompilerServices;
 namespace SerializerFoundation.Tests;
 
 // Runtime coverage for the pin-free fallback tier (the downlevel serializer's buffers,
-// Compatible*/Unsafe*; plain structs, so they run on net10.0 too). Focus: the window
+// Compatible*/Unsafe*; plain structs, so they run on net9.0+ too). Focus: the window
 // bookkeeping — first-rent, segment growth across pooled segments, and the
 // ReadOnlyMemory segment walk with temp stitching.
 public class FallbackTierBufferTest

@@ -3,7 +3,7 @@ SerializerFoundation
 [![CI](https://github.com/Cysharp/SerializerFoundation/actions/workflows/build-debug.yaml/badge.svg)](https://github.com/Cysharp/SerializerFoundation/actions/workflows/build-debug.yaml)
 [![NuGet](https://img.shields.io/nuget/v/SerializerFoundation)](https://www.nuget.org/packages/SerializerFoundation)
 
-High performance serialization infrastructure for C#: buffer interfaces, implementations for spans, pooled arrays and segmented data, and analyzers that catch common contract violations. The package targets netstandard2.0, netstandard2.1 and net10.0.
+High performance serialization infrastructure for C#: buffer interfaces, implementations for spans, pooled arrays and segmented data, and analyzers that catch common contract violations. The package targets netstandard2.0, netstandard2.1 and net9.0.
 
 SerializerFoundation is extracted from the [MessagePack-CSharp v4](https://github.com/MessagePack-CSharp/MessagePack-CSharp/tree/v4) rewrite, drawing on experience from [MessagePack-CSharp](https://github.com/MessagePack-CSharp/MessagePack-CSharp/) and [MemoryPack](https://github.com/Cysharp/MemoryPack). A serializer needs a forward-only buffer, and it needs to support several input and output types such as `Span<byte>`, `IBufferWriter<byte>` and `ReadOnlySequence<byte>`. SerializerFoundation abstracts these behind `IWriteBuffer` and `IReadBuffer`, and provides a buffer layer optimized so that the JIT can specialize code per buffer type.
 
@@ -13,7 +13,7 @@ dotnet add package SerializerFoundation
 
 * **Struct buffers, passed by ref**: buffers flow through `ref TBuffer`, allowing the JIT to specialize generic code per buffer type and devirtualize and inline the hot path
 * **Caller-provided scratch**: `ArrayPoolListWriteBuffer` uses `stackalloc` scratch before renting from `ArrayPool<byte>`, and `ReadOnlySequenceReadBuffer` can assemble windows across segment seams in scratch. `ToArray()` allocates the final output array and copies the written bytes into it
-* **`allows ref struct`**: on net10.0 the `ref struct` buffers flow straight through generic formatters; `Compatible*` variants keep the same code shape on netstandard2.0/2.1
+* **`allows ref struct`**: on net9.0 and later the `ref struct` buffers flow straight through generic formatters; `Compatible*` variants keep the same code shape on netstandard2.0/2.1
 * **Zero-copy segment access**: `BufferSegments` exposes a written message as a borrowed view of its segments, so processors that accept segmented input can consume it without first flattening it
 * **Compile-time checks**: bundled analyzers reject buffer classes (SF001), common accidental buffer copies (SF002) and missing overrides of `[RequireOverride]` methods (SF003)
 
@@ -319,14 +319,14 @@ public static T Deserialize<T>(in ReadOnlySequence<byte> source)
 
 Target Frameworks and the Compatible Tier
 ---
-The package ships a net10.0 asset with `allows ref struct` support and netstandard2.0/2.1 assets for older targets. The language feature itself requires C# 13 and .NET 9 or later, but **this package's generic helper APIs enable it starting with the net10.0 asset**. Use `NET10_0_OR_GREATER` when selecting between the two tiers.
+The package ships a net9.0 asset with `allows ref struct` support and netstandard2.0/2.1 assets for older targets. `allows ref struct` requires C# 13 and the .NET 9 runtime, which is exactly where the net9.0 asset starts, so `NET9_0_OR_GREATER` is the condition for selecting between the two tiers.
 
 | Package asset | Buffer tier for generic serializer code |
 | --- | --- |
-| net10.0 | `ArrayPoolListWriteBuffer`, `BufferWriterWriteBuffer`, `SpanWriteBuffer`, `ReadOnlySpanReadBuffer`, `ReadOnlySequenceReadBuffer` (all `ref struct`) and the `Compatible*` variants |
+| net9.0 and later | `ArrayPoolListWriteBuffer`, `BufferWriterWriteBuffer`, `SpanWriteBuffer`, `ReadOnlySpanReadBuffer`, `ReadOnlySequenceReadBuffer` (all `ref struct`) and the `Compatible*` variants |
 | netstandard2.0, netstandard2.1 | `CompatibleArrayPoolListWriteBuffer`, `CompatibleBufferWriterWriteBuffer`, `CompatibleSpanWriteBuffer`, `CompatibleReadOnlySpanReadBuffer`, `CompatibleReadOnlySequenceReadBuffer` (plain `struct`) |
 
-The `ref struct` buffers exist on every target and can be used directly. Generic serializer code targeting netstandard uses the `Compatible*` tier. .NET 9 applications also select a netstandard asset: their own generic code can allow ref structs, but the package's `GetReference` helper cannot accept them on that asset. Selecting the `Compatible*` tier keeps those helpers usable across older targets.
+The `ref struct` buffers exist on every target and can be used directly. Generic serializer code targeting netstandard uses the `Compatible*` tier, because a `ref struct` cannot be a type argument without `allows ref struct`.
 
 The `Compatible*` structs implement the same interfaces with the same semantics. `CompatibleArrayPoolListWriteBuffer` starts with pooled storage and takes no scratch span; `CompatibleReadOnlySequenceReadBuffer` uses a rented temporary array when stitching is necessary. The span-based variants (`CompatibleSpanWriteBuffer`, `CompatibleReadOnlySpanReadBuffer`) take a `byte*` and length instead of a span. Keep that memory valid for the buffer's lifetime, and pin it when it belongs to a managed object.
 
@@ -337,11 +337,11 @@ A formatter that multi-targets writes its constraints once with a conditional `a
 ```csharp
 public sealed class PointFormatter<TWriteBuffer, TReadBuffer> : IFormatter<TWriteBuffer, TReadBuffer, Point>
     where TWriteBuffer : struct, IWriteBuffer
-#if NET10_0_OR_GREATER
+#if NET9_0_OR_GREATER
     , allows ref struct
 #endif
     where TReadBuffer : struct, IReadBuffer
-#if NET10_0_OR_GREATER
+#if NET9_0_OR_GREATER
     , allows ref struct
 #endif
 {
@@ -354,7 +354,7 @@ Use the same conditional constraints on `IFormatter` and on generic helper metho
 ```csharp
 public static byte[] Serialize<T>(T value)
 {
-#if NET10_0_OR_GREATER
+#if NET9_0_OR_GREATER
     Span<byte> scratch = stackalloc byte[256];
     var buffer = new ArrayPoolListWriteBuffer(scratch);
     try
@@ -382,7 +382,7 @@ public static byte[] Serialize<T>(T value)
 
 public static unsafe T Deserialize<T>(ReadOnlySpan<byte> source)
 {
-#if NET10_0_OR_GREATER
+#if NET9_0_OR_GREATER
     var buffer = new ReadOnlySpanReadBuffer(source);
     try
     {
@@ -413,7 +413,7 @@ public static unsafe T Deserialize<T>(ReadOnlySpan<byte> source)
 
 RequireOverride
 ---
-When a multi-targeted base class adds a generic buffer method only on its net10.0 target, making that method `abstract` would break subclasses compiled against its netstandard target: they have no implementation of the new abstract method. A `virtual` method with a bridge body keeps those subclasses usable, while newly compiled subclasses can override it with a direct implementation.
+When a multi-targeted base class adds a generic buffer method only on its net9.0 target, making that method `abstract` would break subclasses compiled against its netstandard target: they have no implementation of the new abstract method. A `virtual` method with a bridge body keeps those subclasses usable, while newly compiled subclasses can override it with a direct implementation.
 
 `[RequireOverride]` marks such a virtual method as conceptually abstract. The bundled SF003 analyzer requires every non-abstract derived type that can access the method to override it, directly or through a base class. Downlevel compilations never see the method, so they have no override requirement. The following `MessageProcessor` is an example base class for your serializer.
 
@@ -427,8 +427,8 @@ public abstract class MessageProcessor
     // every target: the interface-shaped entry
     public abstract bool TryEncode(ref BufferSegments message, IBufferWriter<byte> output);
 
-#if NET10_0_OR_GREATER
-    // net10.0 only: writes straight into the target buffer.
+#if NET9_0_OR_GREATER
+    // net9.0 and later: writes straight into the target buffer.
     // virtual so netstandard subclasses keep loading; [RequireOverride] so modern subclasses cannot forget it.
     [RequireOverride]
     public virtual bool TryEncode<TWriteBuffer>(ref BufferSegments message, ref TWriteBuffer output)
