@@ -3,24 +3,16 @@ SerializerFoundation
 [![CI](https://github.com/Cysharp/SerializerFoundation/actions/workflows/build-debug.yaml/badge.svg)](https://github.com/Cysharp/SerializerFoundation/actions/workflows/build-debug.yaml)
 [![NuGet](https://img.shields.io/nuget/v/SerializerFoundation)](https://www.nuget.org/packages/SerializerFoundation)
 
-High performance serialization infrastructure for C#: buffer interfaces, implementations for spans, pooled arrays and segmented data, and analyzers that catch common contract violations. The package targets netstandard2.0, netstandard2.1 and net9.0.
+High performance serialization infrastructure for C#. The package targets netstandard2.0, netstandard2.1 and net9.0 or greater.
 
-SerializerFoundation is extracted from the [MessagePack-CSharp v4](https://github.com/MessagePack-CSharp/MessagePack-CSharp/tree/v4) rewrite, drawing on experience from [MessagePack-CSharp](https://github.com/MessagePack-CSharp/MessagePack-CSharp/) and [MemoryPack](https://github.com/Cysharp/MemoryPack). A serializer needs a forward-only buffer, and it needs to support several input and output types such as `Span<byte>`, `IBufferWriter<byte>` and `ReadOnlySequence<byte>`. SerializerFoundation abstracts these behind `IWriteBuffer` and `IReadBuffer`, and provides a buffer layer optimized so that the JIT can specialize code per buffer type.
+SerializerFoundation is extracted from the [MessagePack-CSharp v4](https://github.com/MessagePack-CSharp/MessagePack-CSharp/tree/v4) rewrite; its [performance that outclasses other serializers](https://github.com/MessagePack-CSharp/MessagePack-CSharp/pull/2294) is built on this foundation. A serializer needs a forward-only buffer, and it needs to support several input and output types such as `Span<byte>`, `IBufferWriter<byte>` and `ReadOnlySequence<byte>`. SerializerFoundation abstracts these behind `IWriteBuffer` and `IReadBuffer`, and provides a buffer layer optimized so that the JIT can specialize code per buffer type.
+
+Beyond serializers, it is also suited to any binary reading and writing, such as implementing a network protocol or laying out a database format.
 
 ```bash
 dotnet add package SerializerFoundation
 ```
 
-* **Struct buffers, passed by ref**: buffers flow through `ref TBuffer`, allowing the JIT to specialize generic code per buffer type and devirtualize and inline the hot path
-* **Caller-provided scratch**: `ArrayPoolListWriteBuffer` uses `stackalloc` scratch before renting from `ArrayPool<byte>`, and `ReadOnlySequenceReadBuffer` can assemble windows across segment seams in scratch. `ToArray()` allocates the final output array and copies the written bytes into it
-* **`allows ref struct`**: on net9.0 and later the `ref struct` buffers flow straight through generic formatters; `Compatible*` variants keep the same code shape on netstandard2.0/2.1
-* **Zero-copy segment access**: `BufferSegments` exposes a written message as a borrowed view of its segments, so processors that accept segmented input can consume it without first flattening it
-* **Compile-time checks**: bundled analyzers reject buffer classes (SF001), common accidental buffer copies (SF002) and missing overrides of `[RequireOverride]` methods (SF003)
-
-The design comes from ten years of maintaining MessagePack-CSharp and MemoryPack. A serializer using `IBufferWriter<byte>` directly requests and advances a window for each primitive, or wraps it to cache a window between calls. SerializerFoundation makes that buffer state part of the formatter's generic contract. Its `BufferWriterWriteBuffer` adapter caches the current window, leaving calls to the underlying `IBufferWriter<byte>` for window refills and flushes.
-
-Core Interface
----
 Serializers write into an `IWriteBuffer` and read from an `IReadBuffer`. Both are deliberately small.
 
 ```csharp
@@ -63,6 +55,8 @@ The write side is the familiar `GetSpan` / `Advance` pair from `IBufferWriter<by
 The basic pattern is to build your serializer's definitions on these interfaces, like the following.
 
 ```csharp
+// basic interface
+
 public interface IFormatter<TWriteBuffer, TReadBuffer, T>
     where TWriteBuffer : struct, IWriteBuffer, allows ref struct
     where TReadBuffer : struct, IReadBuffer, allows ref struct
@@ -70,9 +64,31 @@ public interface IFormatter<TWriteBuffer, TReadBuffer, T>
     void Serialize(ref TWriteBuffer buffer, T value);
     T Deserialize(ref TReadBuffer buffer);
 }
+
+public readonly record struct Point(int X, int Y);
+
+public sealed class PointFormatter<TWriteBuffer, TReadBuffer> : IFormatter<TWriteBuffer, TReadBuffer, Point>
+    where TWriteBuffer : struct, IWriteBuffer, allows ref struct
+    where TReadBuffer : struct, IReadBuffer, allows ref struct
+{
+    public void Serialize(ref TWriteBuffer buffer, Point value)
+    {
+        buffer.WriteInt32(value.X);
+        buffer.WriteInt32(value.Y);
+    }
+
+    public Point Deserialize(ref TReadBuffer buffer)
+    {
+        var x = buffer.ReadInt32();
+        var y = buffer.ReadInt32();
+        return new Point(x, y);
+    }
+}
 ```
 
 ```csharp
+// Reader/Writer for IReadBuffer/IWriteBuffer
+
 using System.IO;
 using System.Buffers.Binary;
 using SerializerFoundation;
@@ -108,19 +124,13 @@ public static class BufferExtensions
 }
 ```
 
+A serializer writes by requesting the space it needs with `GetSpan` and reporting how much it wrote with `Advance`, and a single serialization may make these calls hundreds or even thousands of times. Keeping the overhead of each call as close to zero as possible is therefore essential. A serializer also has to support both returning a `byte[]` and streaming writes to an `IBufferWriter<byte>`, which is what `PipeWriter` uses. `IWriteBuffer` ships with three implementations, `ArrayPoolListWriteBuffer`, `BufferWriterWriteBuffer` and `SpanWriteBuffer`, each handling its destination efficiently. By defining and calling code in terms of `TWriteBuffer`, `GetSpan` and `Advance` can be devirtualized and inlined regardless of the destination, keeping the overhead minimal.
+
+When deserializing, the buffer has to support `ReadOnlySpan<byte>` as well as `ReadOnlySequence<byte>`, which is what `PipeReader` uses. Both are abstracted as `IReadBuffer`, so they are driven by the same code and can be inlined.
+
+Unlike writing, when deserializing the required buffer size is sometimes unknown until reading begins: integers are commonly variable-length encoded in 1 to 5 bytes, and the length of a string is unknown until its header has been read. In addition, when the source is a `ReadOnlySequence<byte>`, the span you need may not be available as a whole when it straddles a segment boundary. So the flow is to take `GetUnreadSpan` first, call `TryGetSpan` only when it falls short, and finally call `Advance`.
+
 Span lifetime is the one rule to keep in mind. A span from `GetSpan`, `GetUnreadSpan` or `TryGetSpan` stays valid until the next call that hands out a span (or `Flush` / `Dispose`), because that call may hand the window to the destination, return it to a pool, or replace it with a larger one. `Advance` and `CopyTo` do not invalidate a held span. Anything that may touch the buffer, such as a nested formatter, can request a window, so re-request the span after such calls instead of holding on to it.
-
-`SerializerFoundation.WriteBufferExtensions.GetReference` is a by-reference shortcut for `GetSpan` with the same contract. For example, an encoder can write a little-endian integer through `Unsafe.WriteUnaligned`:
-
-```csharp
-ref byte destination = ref writer.GetReference(sizeof(int));
-System.Runtime.CompilerServices.Unsafe.WriteUnaligned(
-    ref destination,
-    BitConverter.IsLittleEndian ? value : BinaryPrimitives.ReverseEndianness(value));
-writer.Advance(sizeof(int));
-```
-
-Keep one owner for each buffer. A serializer entry point normally constructs it, passes it by `ref` to formatters, and disposes it in `finally`. A `using` local cannot be passed by `ref` (compiler error CS1657), so the entry points below use `try` / `finally`. Caller-provided scratch, input memory and underlying writers are borrowed; disposing a buffer releases its own rented storage or commits its staged writes, without disposing those external resources.
 
 Write Buffers
 ---
@@ -130,7 +140,7 @@ Write Buffers
 | `BufferWriterWriteBuffer` | any `IBufferWriter<byte>` (`PipeWriter`, `ArrayBufferWriter<byte>`) | Writes are staged in the current span and committed on a window refill, `Flush` or `Dispose`. |
 | `SpanWriteBuffer` | a fixed caller-provided span, such as `stackalloc` memory | Never grows; running out of space throws. For messages with a known maximum size. |
 
-`ArrayPoolListWriteBuffer` supports `Serialize<T>(T value) : byte[]` style APIs. It starts with the scratch span you provide, typically `stackalloc` memory. When the next requested window no longer fits, it rents another segment from `ArrayPool<byte>` without copying previously written bytes. Minimum segment sizes grow exponentially, with larger size hints accommodated as needed. `ToArray()` makes the final contiguous copy; use `GetWrittenSegments()` when the next stage can consume segments directly.
+`ArrayPoolListWriteBuffer` supports `byte[] Serialize<T>(T value)` style APIs. It starts with the scratch span you provide, typically `stackalloc` memory. When the next requested window no longer fits, it rents another segment from `ArrayPool<byte>` without copying previously written bytes. Minimum segment sizes grow exponentially, with larger size hints accommodated as needed. `ToArray()` makes the final contiguous copy. This avoids the allocations and copying that a naive implementation incurs by growing through repeated `Array.Resize` calls.
 
 ```csharp
 Span<byte> scratch = stackalloc byte[512];
@@ -172,6 +182,14 @@ finally
 await pipeWriter.FlushAsync();
 ```
 
+`SerializerFoundation.WriteBufferExtensions.GetReference` is a by-reference shortcut for `GetSpan` with the same contract. For example, an encoder can write a little-endian integer through `Unsafe.WriteUnaligned`:
+
+```csharp
+ref byte destination = ref writer.GetReference(sizeof(int));
+Unsafe.WriteUnaligned(ref destination, BitConverter.IsLittleEndian ? value : BinaryPrimitives.ReverseEndianness(value));
+writer.Advance(sizeof(int));
+```
+
 Read Buffers
 ---
 | Type | Source | Notes |
@@ -179,7 +197,9 @@ Read Buffers
 | `ReadOnlySpanReadBuffer` | a single contiguous block, `byte[]` or `ReadOnlySpan<byte>` | The standard entry point. `TryGetSpan` never copies. |
 | `ReadOnlySequenceReadBuffer` | `ReadOnlySequence<byte>`, such as `PipeReader` output | Reads each contiguous segment in place; bytes that straddle a seam are copied into caller scratch, then into a rented temp only when they do not fit. Dispose returns the temp. |
 
-`ReadOnlySequenceReadBuffer` takes an optional scratch span. Small windows that cross a segment seam, which is the common case for a multi-byte token, are assembled in that scratch instead of renting from the pool.
+Wrapping a `byte[]` in `ReadOnlySpanReadBuffer` lets it be consumed as an `IReadBuffer`. The wrapper is very thin, so performance is on par with working directly on a `ReadOnlySpan<byte>` with `Slice`.
+
+Slicing a `ReadOnlySequence<byte>` directly is slow, so processing its internal chain of segments efficiently is critical for performance. `ReadOnlySequenceReadBuffer` does exactly that, and automatically stitches the bytes together when a read straddles a segment boundary. This matters a great deal in binary processing that has to work with spans directly.
 
 ```csharp
 Span<byte> scratch = stackalloc byte[512];
@@ -198,65 +218,8 @@ finally
 
 `CopyTo(Span<byte>)` copies the next bytes without consuming them, and a multi-segment implementation copies straight out of its segments without building a contiguous window first. It is the right call for fixed-size payloads such as a `byte[]` body or a blittable struct, where a contiguous window would only be an intermediate copy.
 
-Keep the input memory valid for the buffer's lifetime. When reading a `PipeReader` result, `buffer.Advance()` only updates the buffer's position; the caller still uses `BytesConsumed` to determine where to call `PipeReader.AdvanceTo()` after decoding.
-
 Building a Serializer
 ---
-A formatter can be generic over both buffer types and receive them by `ref`. The following `Point`, `IFormatter`, formatter and primitive extension methods are examples you implement in your serializer; they are not types supplied by this package.
-
-```csharp
-public readonly struct Point(int x, int y)
-{
-    public int X { get; } = x;
-    public int Y { get; } = y;
-}
-
-public interface IFormatter<TWriteBuffer, TReadBuffer, T>
-    where TWriteBuffer : struct, IWriteBuffer, allows ref struct
-    where TReadBuffer : struct, IReadBuffer, allows ref struct
-{
-    void Serialize(ref TWriteBuffer buffer, T value);
-    T Deserialize(ref TReadBuffer buffer);
-}
-
-public sealed class PointFormatter<TWriteBuffer, TReadBuffer> : IFormatter<TWriteBuffer, TReadBuffer, Point>
-    where TWriteBuffer : struct, IWriteBuffer, allows ref struct
-    where TReadBuffer : struct, IReadBuffer, allows ref struct
-{
-    public void Serialize(ref TWriteBuffer buffer, Point value)
-    {
-        buffer.WriteInt32(value.X);
-        buffer.WriteInt32(value.Y);
-    }
-
-    public Point Deserialize(ref TReadBuffer buffer)
-    {
-        var x = buffer.ReadInt32();
-        var y = buffer.ReadInt32();
-        return new Point(x, y);
-    }
-}
-```
-
-Different value-type buffer arguments allow separate native-code specializations of `PointFormatter`. This lets the JIT devirtualize and inline calls such as `GetSpan` and `Advance` on the hot path. The exact optimization depends on the runtime and calling code; the `BufferWriterWriteBuffer` adapter still calls the underlying writer interface when refilling or flushing.
-
-Primitive encoders are best expressed as C# 14 extension blocks over the buffer type, so that `buffer.WriteInt32(x)` reads naturally inside a formatter while still being fully generic.
-
-```csharp
-public static class PrimitiveWriteExtensions
-{
-    extension<TWriteBuffer>(ref TWriteBuffer buffer)
-        where TWriteBuffer : struct, IWriteBuffer, allows ref struct
-    {
-        public void WriteInt32(int value)
-        {
-            BinaryPrimitives.WriteInt32LittleEndian(buffer.GetSpan(4), value);
-            buffer.Advance(4);
-        }
-    }
-}
-```
-
 The top-level entry points then choose the buffer for the job and hand it to the formatter. In these method excerpts, `GetFormatter<TWriteBuffer, TReadBuffer, T>()` stands for your serializer's resolver, returning an `IFormatter<TWriteBuffer, TReadBuffer, T>`.
 
 ```csharp
@@ -316,6 +279,12 @@ public static T Deserialize<T>(in ReadOnlySequence<byte> source)
     }
 }
 ```
+
+Keep one owner for each buffer. A serializer entry point normally constructs it, passes it by `ref` to formatters, and disposes it in `finally`. A `using` local cannot be passed by `ref` (compiler error CS1657), so the entry points below use `try` / `finally`. Caller-provided scratch, input memory and underlying writers are borrowed; disposing a buffer releases its own rented storage or commits its staged writes, without disposing those external resources.
+
+Async and Streaming Interfaces
+---
+SerializerFoundation provides synchronous interfaces only. Asynchronous operations inside frequently called code degrade performance, and the established approach in such cases is to buffer a reasonable amount of data and then process it synchronously in one go. The core of SerializerFoundation is designed for definitions inside that synchronous processing. For a serializer, memory-conscious asynchronous streaming is only needed when processing a sequence of values, such as an array or JSON Lines. The recommended design is therefore to provide dedicated interfaces for those cases and to `await` on the outside.
 
 Target Frameworks and the Compatible Tier
 ---
