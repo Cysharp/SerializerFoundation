@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>netstandard2.0</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <EnforceExtendedAnalyzerRules>true</EnforceExtendedAnalyzerRules>
+    <IsRoslynComponent>true</IsRoslynComponent>
+    <!-- Not a standalone package: SerializerFoundation.csproj packs this DLL under analyzers/dotnet/cs. -->
+    <IsPackable>false</IsPackable>
+    <Description>Analyzers enforcing SerializerFoundation's buffer contracts: SF001 (IWriteBuffer/IReadBuffer implementations must be structs; the ID was recycled from the retired mandatory-net10.0-target rule), SF002 (buffer structs are single-owner and must not be copied), SF003 ([RequireOverride] virtuals must be overridden wherever the member is visible). Foundation-level rules only; serializer-specific analyzers live with their own generator.</Description>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- keep the floor low: the IDE loads analyzers with ITS OWN Roslyn, so targeting a
+         new Microsoft.CodeAnalysis breaks Visual Studio versions older than that Roslyn while dotnet build keeps working. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="4.3.1" PrivateAssets="all" />
+    <!-- build-time only (release tracking, analyzer authoring rules); the 3.3.x version bundled with
+         Roslyn 4.3.1 mis-parses release tracking files. Does not affect the runtime Roslyn floor. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.Analyzers" Version="3.11.0" PrivateAssets="all" />
+  </ItemGroup>
+
+  <!-- Analyzer release tracking (RS2000-RS2008): every rule ID must be listed in Shipped or Unshipped -->
+  <ItemGroup>
+    <AdditionalFiles Include="AnalyzerReleases.Shipped.md" />
+    <AdditionalFiles Include="AnalyzerReleases.Unshipped.md" />
+  </ItemGroup>
+
+</Project>

@@ -1,11 +1,13 @@
-﻿namespace SerializerFoundation;
+namespace SerializerFoundation;
 
-// Span like structure for a pointer and length.
-// But mutable slice to optimize without JIT intrinsics of Span.
-internal unsafe struct PointerSpan
+// Span-like structure for a pointer and length.
+// An unsafe twin of Span<byte>, mirroring its shape (readonly struct, Slice returns a new value).
+// Exists because Span<byte> is a ref struct and cannot be a field of a class or plain struct.
+
+internal readonly unsafe struct PointerSpan
 {
-    byte* pointer;
-    int length;
+    readonly byte* pointer;
+    readonly int length;
 
     public int Length
     {
@@ -16,6 +18,7 @@ internal unsafe struct PointerSpan
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public PointerSpan(byte* pointer, int length)
     {
+        if (length < 0) Throws.ArgumentOutOfRange();
         this.pointer = pointer;
         this.length = length;
     }
@@ -35,13 +38,16 @@ internal unsafe struct PointerSpan
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<byte> AsSpan(int start)
     {
+        if ((uint)start > (uint)length) Throws.ArgumentOutOfRange();
         return new Span<byte>(pointer + start, length - start);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public Span<byte> AsSpan(int start, int length)
+    public Span<byte> AsSpan(int start, int count)
     {
-        return new Span<byte>(pointer + start, length);
+        // same combined start+count validation shape as Span.Slice
+        if ((ulong)(uint)start + (uint)count > (uint)length) Throws.ArgumentOutOfRange();
+        return new Span<byte>(pointer + start, count);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -62,13 +68,11 @@ internal unsafe struct PointerSpan
         return span.AsReadOnlySpan();
     }
 
-    // like Slice but mutable.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void Advance(int start)
+    public PointerSpan Slice(int start)
     {
-        if ((uint)start > (uint)Length) Throws.ArgumentOutOfRange();
+        if ((uint)start > (uint)length) Throws.ArgumentOutOfRange();
 
-        this.pointer = pointer + start;
-        this.length = length - start;
+        return new PointerSpan(pointer + start, length - start);
     }
 }

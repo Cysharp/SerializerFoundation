@@ -1,5 +1,16 @@
-﻿namespace SerializerFoundation;
+// Uses a pooling strategy close to dotnet/runtime's SegmentedArrayBuilder.
+// Unlike that internal type, however, this is exposed as public API with a long code path,
+// which raises the risk of a double-Return caused by copying the struct.
+// For that reason, we bundle an Analyzer(NonCopyableBufferAnalyzer) that reports an error when a struct implementing IReadBuffer/IWriteBuffer is copied, to prevent this.
+// I hope C# will support ownership as a language feature in the future. https://github.com/dotnet/csharplang/pull/10296
 
+namespace SerializerFoundation;
+
+/// <summary>
+/// An <see cref="IWriteBuffer"/> that stages the message in a caller-provided scratch span first,
+/// then in a chain of arrays rented from <see cref="ArrayPool{T}"/>.
+/// Dispose returns the rented arrays and must be called exactly once.
+/// </summary>
 public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 {
     PooledArrays pooledArrays;
@@ -29,6 +40,9 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 
     }
 
+    /// <summary>
+    /// Creates a write buffer that fills <paramref name="scratchBuffer"/> (typically stackalloc memory) before renting from the pool.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ArrayPoolListWriteBuffer(Span<byte> scratchBuffer)
     {
@@ -47,6 +61,8 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         else
         {
 #if !NETSTANDARD2_0
+            // The JIT does not always eliminate the range check inside Slice.
+            // This is a hot path and called frequently, so we avoid Slice here since the bounds are already checked by the branch above.
             return MemoryMarshal.CreateSpan(
                 ref Unsafe.Add(ref MemoryMarshal.GetReference(currentBuffer), currentWritten),
                 remaining);
@@ -56,24 +72,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         }
     }
 
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref byte GetReference(int sizeHint = 0)
-    {
-        var remaining = currentBuffer.Length - currentWritten;
-        if (remaining == 0 || (uint)remaining < (uint)sizeHint)
-        {
-            return ref MemoryMarshal.GetReference(GetSpanSlow(sizeHint));
-        }
-        else
-        {
-            return ref Unsafe.Add(ref MemoryMarshal.GetReference(currentBuffer), currentWritten);
-        }
-    }
-
     [MethodImpl(MethodImplOptions.NoInlining)]
     Span<byte> GetSpanSlow(int sizeHint)
     {
-        if (sizeHint <= 0) sizeHint = 1;
+        if (sizeHint < 0) Throws.ArgumentOutOfRange();
+        if (sizeHint == 0) sizeHint = 1;
 
         if (currentBuffer.Length - currentWritten < sizeHint)
         {
@@ -96,9 +99,14 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int bytesWritten)
     {
+        if ((uint)bytesWritten > (uint)(currentBuffer.Length - currentWritten))
+        {
+            Throws.AdvancedTooFar();
+        }
         currentWritten += bytesWritten;
     }
 
+    /// <summary>Copies the written message into a new array.</summary>
     public byte[] ToArray()
     {
         var totalLength = checked((int)BytesWritten);
@@ -109,6 +117,9 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Copies the written message into <paramref name="destination"/>, which must be at least <see cref="BytesWritten"/> bytes long.
+    /// </summary>
     public void WriteTo(Span<byte> destination)
     {
         // copy scratch buffer
@@ -175,123 +186,28 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         _ => Throws.InsufficientSpaceInBuffer<int>(),
     };
 
-#if NET9_0_OR_GREATER
-
-    [InlineArray(16)]
-    internal struct PooledArrays
+    /// <summary>Borrowed zero-copy view of the written message; valid until the next write or Dispose.</summary>
+    public BufferSegments GetWrittenSegments()
     {
-        public byte[]? value;
-    }
-
-    [InlineArray(17)] // scratch(1) + pooled(16)
-    internal struct CompletedLengths
-    {
-        public int value;
-    }
-
-#else
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct PooledArrays
-    {
-        byte[]? _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15;
-
-        public ref byte[]? this[int index]
-        {
-            [System.Diagnostics.CodeAnalysis.UnscopedRef]
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref Unsafe.Add(ref _0, index);
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CompletedLengths
-    {
-        int _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16;
-
-        public ref int this[int index]
-        {
-            [System.Diagnostics.CodeAnalysis.UnscopedRef]
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref Unsafe.Add(ref _0, index);
-        }
-    }
-
-#endif
-
-    // iterator
-
-    public WrittenSegmentIterator GetWrittenSegments()
-    {
-        return new WrittenSegmentIterator(ref this);
-    }
-
-    public ref struct WrittenSegmentIterator
-    {
-        readonly Span<byte> scratchBuffer;
-        readonly PooledArrays pooledArrays;
-        readonly CompletedLengths completedLengths;
-        readonly int pooledCount;
-        readonly int currentWritten;
-        int index;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal WrittenSegmentIterator(scoped ref ArrayPoolListWriteBuffer buffer)
-        {
-            this.scratchBuffer = buffer.scratchBuffer;
-            this.pooledArrays = buffer.pooledArrays;
-            this.completedLengths = buffer.completedLengths;
-            this.pooledCount = buffer.pooledCount;
-            this.currentWritten = buffer.currentWritten;
-            this.index = -1;
-        }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetNext(out ReadOnlySpan<byte> segment)
-        {
-            index++;
-
-            if (index == 0)
-            {
-                var len = pooledCount > 0 ? completedLengths[0] : currentWritten;
-                if (len > 0)
-                {
-                    segment = scratchBuffer.Slice(0, len);
-                    return true;
-                }
-                index++;
-            }
-
-            if ((uint)(index - 1) < (uint)pooledCount)
-            {
-                var pooledIndex = index - 1;
-                var len = pooledIndex < pooledCount - 1
-                    ? completedLengths[pooledIndex + 1]
-                    : currentWritten;
-                segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
-                return true;
-            }
-
-            segment = default;
-            return false;
-        }
-
-        public void Reset()
-        {
-            index = -1;
-        }
+        var firstLength = pooledCount > 0 ? completedLengths[0] : currentWritten;
+        return new BufferSegments(scratchBuffer.Slice(0, firstLength), in pooledArrays, in completedLengths, pooledCount, currentWritten, BytesWritten);
     }
 }
 
-public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
+// Boxed instances double as the interface-shaped staging buffer (interface calls mutate the box in place).
+// However, that needs to be handled carefully.
+// (The Analyzer will warn about this, so only disable it if you understand what it means)
+
+/// <summary>
+/// An <see cref="ArrayPoolListWriteBuffer"/> variant for target frameworks without <c>allows ref struct</c> support.
+/// </summary>
+public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IBufferWriter<byte>
 {
     PooledArrays pooledArrays;
-    CompletedLengths completedLengths; // [0] = scratch, [1..] = pooled
+    CompletedLengths completedLengths; // [i] = finished length of pooled segment i
     int pooledCount;
 
-    PointerSpan scratchBuffer;
-    PointerSpan currentBuffer;
-    MemoryHandle currentBufferHandle;
+    byte[]? currentArray; // == pooledArrays[pooledCount - 1] once the first segment is rented
     int currentWritten;
 
     public long BytesWritten
@@ -299,7 +215,7 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         get
         {
             long total = 0;
-            for (int i = 0; i < pooledCount; i++)
+            for (int i = 0; i < pooledCount - 1; i++)
             {
                 total += completedLengths[i];
             }
@@ -307,73 +223,67 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         }
     }
 
-    [Obsolete("Use scratchBuffer ctor instead.", true)]
-    public NonRefArrayPoolListWriteBuffer()
-    {
-
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public NonRefArrayPoolListWriteBuffer(byte* scratchBuffer, int length)
-    {
-        this.scratchBuffer = new PointerSpan(scratchBuffer, length);
-        this.currentBuffer = this.scratchBuffer;
-    }
-
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Span<byte> GetSpan(int sizeHint = 0)
     {
-        if (currentBuffer.Length == 0 || (uint)currentBuffer.Length < (uint)sizeHint)
+        var array = currentArray;
+        if (array != null)
         {
-            return GetSpanSlow(sizeHint);
+            var remaining = array.Length - currentWritten;
+            if (remaining != 0 && (uint)remaining >= (uint)sizeHint)
+            {
+                return array.AsSpan(currentWritten);
+            }
         }
-
-        return currentBuffer;
-    }
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref byte GetReference(int sizeHint = 0)
-    {
-        if (currentBuffer.Length == 0 || (uint)currentBuffer.Length < (uint)sizeHint)
-        {
-            return ref MemoryMarshal.GetReference(GetSpanSlow(sizeHint));
-        }
-
-        return ref currentBuffer.GetReference();
+        return GetSpanSlow(sizeHint);
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
     Span<byte> GetSpanSlow(int sizeHint)
     {
-        if (sizeHint <= 0) sizeHint = 1;
+        if (sizeHint < 0) Throws.ArgumentOutOfRange();
+        if (sizeHint == 0) sizeHint = 1;
 
-        if (currentBuffer.Length - currentWritten < sizeHint)
+        var array = currentArray;
+        if (array == null || array.Length - currentWritten < sizeHint)
         {
             // finish current segment
-            completedLengths[pooledCount] = currentWritten;
+            if (pooledCount > 0)
+            {
+                completedLengths[pooledCount - 1] = currentWritten;
+            }
 
             // allocate next segment
             var minSize = GetMinSegmentSize(pooledCount);
             var requiredSize = Math.Max(sizeHint, minSize);
-            var newArray = ArrayPool<byte>.Shared.Rent(requiredSize);
-            pooledArrays[pooledCount++] = newArray;
-
-            currentBufferHandle.Dispose(); // unpin previous buffer
-            var memory = newArray.AsMemory();
-            currentBufferHandle = memory.Pin();
-            currentBuffer = new PointerSpan((byte*)currentBufferHandle.Pointer, memory.Length);
+            array = ArrayPool<byte>.Shared.Rent(requiredSize);
+            pooledArrays[pooledCount++] = array;
+            currentArray = array;
             currentWritten = 0;
         }
-        return currentBuffer;
+        return array.AsSpan(currentWritten);
     }
 
+    public Memory<byte> GetMemory(int sizeHint = 0)
+    {
+        GetSpan(sizeHint); // ensures capacity in currentArray
+        return currentArray!.AsMemory(currentWritten);
+    }
+
+    // same guard as the ref variant, maintaining 0 <= currentWritten <= capacity;
+    // before the first rent the capacity is 0, so any nonzero Advance throws
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int bytesWritten)
     {
+        var capacity = currentArray is null ? 0 : currentArray.Length;
+        if ((uint)bytesWritten > (uint)(capacity - currentWritten))
+        {
+            Throws.AdvancedTooFar();
+        }
         currentWritten += bytesWritten;
-        currentBuffer.Advance(bytesWritten); // Unlike the ref version, call advance.
     }
 
+    /// <summary>Copies the written message into a new array.</summary>
     public byte[] ToArray()
     {
         var totalLength = checked((int)BytesWritten);
@@ -384,20 +294,14 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         return result;
     }
 
+    /// <summary>
+    /// Copies the written message into <paramref name="destination"/>, which must be at least <see cref="BytesWritten"/> bytes long.
+    /// </summary>
     public void WriteTo(Span<byte> destination)
     {
-        // copy scratch buffer
-        var scratchLen = pooledCount > 0 ? completedLengths[0] : currentWritten;
-        if (scratchLen > 0)
-        {
-            scratchBuffer.AsSpan(0, scratchLen).CopyTo(destination);
-            destination = destination.Slice(scratchLen);
-        }
-
-        // copy pooled buffers
         for (int i = 0; i < pooledCount; i++)
         {
-            var len = i < pooledCount - 1 ? completedLengths[i + 1] : currentWritten;
+            var len = i < pooledCount - 1 ? completedLengths[i] : currentWritten;
             pooledArrays[i]!.AsSpan(0, len).CopyTo(destination);
             destination = destination.Slice(len);
         }
@@ -420,8 +324,7 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         }
         pooledCount = 0;
         currentWritten = 0;
-        currentBuffer = default;
-        currentBufferHandle.Dispose();
+        currentArray = null;
     }
 
     // Segment sizes grow exponentially from 64KB to 1GB.
@@ -451,109 +354,18 @@ public unsafe struct NonRefArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         _ => Throws.InsufficientSpaceInBuffer<int>(),
     };
 
-#if NET9_0_OR_GREATER
-
-    [InlineArray(16)]
-    internal struct PooledArrays
-    {
-        public byte[]? value;
-    }
-
-    [InlineArray(17)] // scratch(1) + pooled(16)
-    internal struct CompletedLengths
-    {
-        public int value;
-    }
-
-#else
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct PooledArrays
-    {
-        byte[]? _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15;
-
-        public ref byte[]? this[int index]
-        {
-            [System.Diagnostics.CodeAnalysis.UnscopedRef]
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref Unsafe.Add(ref _0, index);
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    internal struct CompletedLengths
-    {
-        int _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16;
-
-        public ref int this[int index]
-        {
-            [System.Diagnostics.CodeAnalysis.UnscopedRef]
-            [MethodImpl(MethodImplOptions.AggressiveInlining)]
-            get => ref Unsafe.Add(ref _0, index);
-        }
-    }
-
-#endif
-
     // iterator
-    public WrittenSegmentIterator GetWrittenSegments()
+
+    /// <summary>Borrowed zero-copy view of the written message; valid until the next write or Dispose.</summary>
+    public BufferSegments GetWrittenSegments()
     {
-        return new WrittenSegmentIterator(ref this);
-    }
-
-    public ref struct WrittenSegmentIterator
-    {
-        readonly PointerSpan scratchBuffer;
-        readonly PooledArrays pooledArrays;
-        readonly CompletedLengths completedLengths;
-        readonly int pooledCount;
-        readonly int currentWritten;
-        int index;
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        internal WrittenSegmentIterator(scoped ref NonRefArrayPoolListWriteBuffer buffer)
+        // normalize this variant's lengths ([i] = pooled segment i) to the shared
+        // scratch-first layout ([i + 1] = pooled segment i) expected by BufferSegments
+        var normalized = default(CompletedLengths);
+        for (int i = 0; i < pooledCount - 1; i++)
         {
-            this.scratchBuffer = buffer.scratchBuffer;
-            this.pooledArrays = buffer.pooledArrays;
-            this.completedLengths = buffer.completedLengths;
-            this.pooledCount = buffer.pooledCount;
-            this.currentWritten = buffer.currentWritten;
-            this.index = -1;
+            normalized[i + 1] = completedLengths[i];
         }
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public bool TryGetNext(out ReadOnlySpan<byte> segment)
-        {
-            index++;
-
-            if (index == 0)
-            {
-                var len = pooledCount > 0 ? completedLengths[0] : currentWritten;
-                if (len > 0)
-                {
-                    segment = scratchBuffer.AsSpan(0, len);
-                    return true;
-                }
-                index++;
-            }
-
-            if ((uint)(index - 1) < (uint)pooledCount)
-            {
-                var pooledIndex = index - 1;
-                var len = pooledIndex < pooledCount - 1
-                    ? completedLengths[pooledIndex + 1]
-                    : currentWritten;
-                segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
-                return true;
-            }
-
-            segment = default;
-            return false;
-        }
-
-        public void Reset()
-        {
-            index = -1;
-        }
+        return new BufferSegments(default, in pooledArrays, in normalized, pooledCount, currentWritten, BytesWritten);
     }
 }

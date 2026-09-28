@@ -1,49 +1,75 @@
-﻿namespace SerializerFoundation;
+namespace SerializerFoundation;
 
-// non ref-struct variation -> PointerReadBuffer
-
+/// <summary>
+/// An <see cref="IReadBuffer"/> over a single contiguous block of memory.
+/// The standard entry point for reading from a byte array or span.
+/// </summary>
 public ref struct ReadOnlySpanReadBuffer : IReadBuffer
 {
-    ReadOnlySpan<byte> buffer;
-    int consumed = 0;
-    readonly int length = 0;
+    readonly ReadOnlySpan<byte> buffer;
+    int consumed;
 
     public long BytesConsumed => consumed;
-    public long BytesRemaining => length - consumed;
+    public long BytesRemaining => buffer.Length - consumed;
 
+    /// <summary>Creates a read buffer over <paramref name="buffer"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public ReadOnlySpanReadBuffer(ReadOnlySpan<byte> buffer)
     {
         this.buffer = buffer;
-        this.length = buffer.Length;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<byte> GetSpan(int sizeHint = 0)
+    public ReadOnlySpan<byte> GetUnreadSpan()
     {
-        if (buffer.Length == 0 || (uint)buffer.Length < (uint)sizeHint)
-        {
-            Throws.InsufficientSpaceInBuffer();
-        }
-
-        return buffer;
+        // Advance bounds consumed by the whole buffer,
+        // so remaining is never negative and the offset needs no clamp
+        var remaining = buffer.Length - consumed;
+#if !NETSTANDARD2_0
+        // The JIT does not always eliminate the range check inside Slice.
+        // This is a hot path and called frequently, so we avoid Slice here since the bounds are guaranteed by the Advance invariant.
+        return MemoryMarshal.CreateReadOnlySpan(
+            ref Unsafe.Add(ref MemoryMarshal.GetReference(buffer), consumed),
+            remaining);
+#else
+        return buffer.Slice(consumed, remaining);
+#endif
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly byte GetReference(int sizeHint = 0)
+    public bool TryGetSpan(int sizeHint, out ReadOnlySpan<byte> span)
     {
-        if (buffer.Length == 0 || (uint)buffer.Length < (uint)sizeHint)
+        var remaining = buffer.Length - consumed;
+        if ((uint)remaining < (uint)sizeHint)
         {
-            Throws.InsufficientSpaceInBuffer();
+            if (sizeHint < 0) Throws.ArgumentOutOfRange();
+            span = default;
+            return false;
         }
 
-        return ref MemoryMarshal.GetReference(buffer);
+        span = GetUnreadSpan();
+        return true;
+    }
+
+    // always contiguous, so this is the one copy the destination inherently needs.
+    // Span.Length is never negative, so a plain compare covers the guard.
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public void CopyTo(Span<byte> destination)
+    {
+        if (destination.Length > buffer.Length - consumed)
+        {
+            Throws.InsufficientDataInBuffer();
+        }
+        buffer.Slice(consumed, destination.Length).CopyTo(destination);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int bytesConsumed)
     {
-        buffer = buffer.Slice(bytesConsumed);
+        if ((uint)bytesConsumed > (uint)(buffer.Length - consumed))
+        {
+            Throws.AdvancedTooFar();
+        }
         consumed += bytesConsumed;
     }
 
@@ -52,48 +78,67 @@ public ref struct ReadOnlySpanReadBuffer : IReadBuffer
     }
 }
 
-public unsafe struct PointerReadBuffer : IReadBuffer
+/// <summary>
+/// A <see cref="ReadOnlySpanReadBuffer"/> variant over pointer memory for target frameworks without <c>allows ref struct</c> support.
+/// </summary>
+public unsafe struct CompatibleReadOnlySpanReadBuffer : IReadBuffer
 {
-    PointerSpan buffer;
+    readonly PointerSpan buffer;
     int consumed;
-    readonly int length;
 
     public long BytesConsumed => consumed;
-    public long BytesRemaining => length - consumed;
+    public long BytesRemaining => buffer.Length - consumed;
 
+    /// <summary>
+    /// Creates a read buffer over <paramref name="length"/> bytes starting at <paramref name="buffer"/>.
+    /// The memory must stay valid and pinned while in use.
+    /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public PointerReadBuffer(byte* buffer, int length)
+    public CompatibleReadOnlySpanReadBuffer(byte* buffer, int length)
     {
         this.buffer = new(buffer, length);
-        this.length = length;
+    }
+
+    // invariant-backed window, see ReadOnlySpanReadBuffer.GetUnreadSpan
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySpan<byte> GetUnreadSpan()
+    {
+        return buffer.AsSpan(consumed, buffer.Length - consumed);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySpan<byte> GetSpan(int sizeHint = 0)
+    public bool TryGetSpan(int sizeHint, out ReadOnlySpan<byte> span)
     {
-        if (buffer.Length == 0 || (uint)buffer.Length < (uint)sizeHint)
+        var remaining = buffer.Length - consumed;
+        if ((uint)remaining < (uint)sizeHint)
         {
-            Throws.InsufficientSpaceInBuffer();
+            if (sizeHint < 0) Throws.ArgumentOutOfRange();
+            span = default;
+            return false;
         }
 
-        return buffer.AsSpan();
+        span = buffer.AsSpan(consumed, remaining);
+        return true;
     }
 
+    // always contiguous, see ReadOnlySpanReadBuffer.CopyTo
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ref readonly byte GetReference(int sizeHint = 0)
+    public void CopyTo(Span<byte> destination)
     {
-        if (buffer.Length == 0 || (uint)buffer.Length < (uint)sizeHint)
+        if (destination.Length > buffer.Length - consumed)
         {
-            Throws.InsufficientSpaceInBuffer();
+            Throws.InsufficientDataInBuffer();
         }
-
-        return ref buffer.GetReference();
+        buffer.AsSpan(consumed, destination.Length).CopyTo(destination);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Advance(int bytesConsumed)
     {
-        buffer.Advance(bytesConsumed);
+        if ((uint)bytesConsumed > (uint)(buffer.Length - consumed))
+        {
+            Throws.AdvancedTooFar();
+        }
         consumed += bytesConsumed;
     }
 
@@ -101,4 +146,3 @@ public unsafe struct PointerReadBuffer : IReadBuffer
     {
     }
 }
-

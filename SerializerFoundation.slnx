@@ -11,11 +11,11 @@
     <File Path="README.md" />
   </Folder>
   <Folder Name="/sandbox/">
-    <Project Path="sandbox/Benchmark/Benchmark.csproj" />
     <Project Path="sandbox/ConsoleApp1/ConsoleApp1.csproj" />
   </Folder>
   <Folder Name="/src/">
     <Project Path="src/SerializerFoundation/SerializerFoundation.csproj" />
+    <Project Path="src/SerializerFoundation.Analyzers/SerializerFoundation.Analyzers.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/SerializerFoundation.Tests/SerializerFoundation.Tests.csproj" />
