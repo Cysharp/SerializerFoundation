@@ -156,7 +156,7 @@ finally
 }
 ```
 
-When the message has to be post-processed before it reaches its destination, `GetWrittenSegments()` returns a `BufferSegments`: a borrowed, zero-copy view of the written message, valid until the next write or Dispose. Each segment is a `ReadOnlySpan<byte>`, so a compressor or framing layer that accepts segmented input can consume it directly. Iterate with `TryGetNext`; `Reset()` restarts from the first segment.
+When the message has to be post-processed before it reaches its destination, `GetWrittenSegments()` returns a `BufferSegments`: a borrowed, zero-copy view of the written message, valid until the next write or Dispose. Each segment is a non-empty `ReadOnlySpan<byte>`, so a compressor or framing layer that accepts segmented input can consume it directly. Iterate with `TryGetNext`; `Reset()` restarts from the first segment. `SegmentCount` gives the number of segments up front, so a header that depends on it (a block count, a length table) can be written without a counting pass, and `Length` gives the total byte count.
 
 ```csharp
 var segments = buffer.GetWrittenSegments();

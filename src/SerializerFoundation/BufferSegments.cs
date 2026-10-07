@@ -95,31 +95,40 @@ internal struct CompletedLengths
 /// <summary>
 /// A borrowed, forward-only view of a written message, exposed as zero-copy segments.
 /// Valid only while the source buffer is alive and unmodified.
+/// Every segment is non-empty, and <see cref="SegmentCount"/> tells how many there are up front.
 /// Instead of foreach, you can loop with `while (segments.TryGetNext(out var segment))`.
 /// </summary>
 public ref struct BufferSegments
 {
     // first (scratch, pre-sliced; empty means "no first segment") followed by
-    // rented arrays with normalized lengths ([i + 1] = finished length of pooled segment i, the last one uses currentWritten)
+    // rented arrays with normalized lengths ([i + 1] = finished length of pooled segment i, the last one uses lastPooledLength).
+    // The producers guarantee no pooled segment is empty (the writers replace an untouched array
+    // in place rather than finishing it empty, and GetWrittenSegments drops an unwritten tail).
     readonly ReadOnlySpan<byte> first;
     readonly PooledArrays pooledArrays;
     readonly CompletedLengths completedLengths;
     readonly int pooledCount;
-    readonly int currentWritten;
+    readonly int lastPooledLength;
     readonly long length;
     int index;
 
     /// <summary>Total message length in bytes.</summary>
     public readonly long Length => length;
 
+    /// <summary>
+    /// Number of segments <see cref="TryGetNext"/> yields over a full pass (none of them empty).
+    /// Lets a header that depends on the segment count be written without a counting pass.
+    /// </summary>
+    public readonly int SegmentCount => (first.Length > 0 ? 1 : 0) + pooledCount;
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal BufferSegments(ReadOnlySpan<byte> first, scoped in PooledArrays pooledArrays, scoped in CompletedLengths completedLengths, int pooledCount, int currentWritten, long length)
+    internal BufferSegments(ReadOnlySpan<byte> first, scoped in PooledArrays pooledArrays, scoped in CompletedLengths completedLengths, int pooledCount, int lastPooledLength, long length)
     {
         this.first = first;
         this.pooledArrays = pooledArrays;
         this.completedLengths = completedLengths;
         this.pooledCount = pooledCount;
-        this.currentWritten = currentWritten;
+        this.lastPooledLength = lastPooledLength;
         this.length = length;
         index = -1;
     }
@@ -145,7 +154,7 @@ public ref struct BufferSegments
         {
             var len = pooledIndex < pooledCount - 1
                 ? completedLengths[pooledIndex + 1]
-                : currentWritten;
+                : lastPooledLength;
             segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
             return true;
         }

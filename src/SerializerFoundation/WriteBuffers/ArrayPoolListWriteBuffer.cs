@@ -80,6 +80,19 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 
         if (currentBuffer.Length - currentWritten < sizeHint)
         {
+            if (pooledCount > 0 && currentWritten == 0)
+            {
+                // the current pooled array is untouched (e.g. GetSpan() followed by GetSpan(big));
+                // replace it in place instead of recording an empty segment and burning a slot
+                // (rent before return so a failed Rent never leaves a returned array in the slot)
+                var slot = pooledCount - 1;
+                var replacement = ArrayPool<byte>.Shared.Rent(Math.Max(sizeHint, GetMinSegmentSize(slot)));
+                ArrayPool<byte>.Shared.Return(pooledArrays[slot]!);
+                pooledArrays[slot] = replacement;
+                currentBuffer = replacement;
+                return replacement;
+            }
+
             // finish current segment
             completedLengths[pooledCount] = currentWritten;
 
@@ -190,7 +203,16 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
     public BufferSegments GetWrittenSegments()
     {
         var firstLength = pooledCount > 0 ? completedLengths[0] : currentWritten;
-        return new BufferSegments(scratchBuffer.Slice(0, firstLength), in pooledArrays, in completedLengths, pooledCount, currentWritten, BytesWritten);
+        // GetSpanSlow never records an empty completed segment, so the only possible empty
+        // segment is a freshly rented, still-unwritten tail; drop it so every segment is non-empty
+        var visiblePooled = pooledCount;
+        var lastLength = currentWritten;
+        if (pooledCount > 0 && currentWritten == 0)
+        {
+            visiblePooled--;
+            lastLength = completedLengths[pooledCount - 1]; // finished length of the new last pooled segment
+        }
+        return new BufferSegments(scratchBuffer.Slice(0, firstLength), in pooledArrays, in completedLengths, visiblePooled, lastLength, BytesWritten);
     }
 }
 
@@ -247,6 +269,18 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         var array = currentArray;
         if (array == null || array.Length - currentWritten < sizeHint)
         {
+            if (array != null && currentWritten == 0)
+            {
+                // the current pooled array is untouched; replace it in place instead of
+                // recording an empty segment and burning a slot (rent before return, see the ref variant)
+                var slot = pooledCount - 1;
+                var replacement = ArrayPool<byte>.Shared.Rent(Math.Max(sizeHint, GetMinSegmentSize(slot)));
+                ArrayPool<byte>.Shared.Return(array);
+                pooledArrays[slot] = replacement;
+                currentArray = replacement;
+                return replacement;
+            }
+
             // finish current segment
             if (pooledCount > 0)
             {
@@ -366,6 +400,14 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         {
             normalized[i + 1] = completedLengths[i];
         }
-        return new BufferSegments(default, in pooledArrays, in normalized, pooledCount, currentWritten, BytesWritten);
+        // drop a freshly rented, still-unwritten tail so every segment is non-empty
+        var visiblePooled = pooledCount;
+        var lastLength = currentWritten;
+        if (pooledCount > 0 && currentWritten == 0)
+        {
+            visiblePooled--;
+            lastLength = visiblePooled > 0 ? completedLengths[visiblePooled - 1] : 0; // finished length of the new last pooled segment
+        }
+        return new BufferSegments(default, in pooledArrays, in normalized, visiblePooled, lastLength, BytesWritten);
     }
 }
