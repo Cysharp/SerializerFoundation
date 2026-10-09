@@ -13,6 +13,12 @@ Beyond serializers, it is also suited to any binary reading and writing, such as
 dotnet add package SerializerFoundation
 ```
 
+**Library authors: reference the package with `PrivateAssets="none"`.** If your library depends on SerializerFoundation and is itself published as a NuGet package, NuGet's default `PrivateAssets` strips the bundled analyzers from your package's dependency, so your users never get SF001-SF003. Always declare the reference as:
+
+```xml
+<PackageReference Include="SerializerFoundation" Version="1.1.0" PrivateAssets="none" />
+```
+
 Serializers write into an `IWriteBuffer` and read from an `IReadBuffer`. Both are deliberately small.
 
 ```csharp
@@ -462,7 +468,13 @@ var buffer = new ArrayPoolListWriteBuffer(scratch); // OK: constructed in place
 var copy = buffer;                                 // SF002: copied by assignment
 ```
 
-The analyzers ship inside the SerializerFoundation package under `analyzers/dotnet/cs` and require a host compatible with Roslyn 4.3.1 or later. Standard NuGet `PackageReference` integration loads them automatically, including through transitive package references unless analyzer assets are excluded. When importing DLLs manually or through an engine-specific workflow, configure that host to load the analyzer DLL as well.
+The analyzers ship inside the SerializerFoundation package under `analyzers/dotnet/cs` and require a host compatible with Roslyn 4.3.1 or later. A direct `PackageReference` loads them automatically. Transitive references are different: NuGet's default `PrivateAssets` (`contentfiles;analyzers;build`) writes `exclude="Build,Analyzers"` into the dependency entry of any package that references SerializerFoundation, so applications that only reference that package never load the analyzers. **If you publish a library that depends on SerializerFoundation, always reference it with `PrivateAssets="none"`** so the analyzers reach your users:
+
+```xml
+<PackageReference Include="SerializerFoundation" Version="1.1.0" PrivateAssets="none" />
+```
+
+When importing DLLs manually or through an engine-specific workflow, configure that host to load the analyzer DLL as well.
 
 License
 ---
