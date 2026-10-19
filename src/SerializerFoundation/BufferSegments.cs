@@ -1,94 +1,43 @@
 ﻿namespace SerializerFoundation;
 
-// backing storage shared by the pooled-list write buffers (both tiers) and the
-// BufferSegments view; 16 exponentially-growing segments are enough to reach Array.MaxLength
+// Backing storage shared by the pooled-list write buffers (both tiers) and the BufferSegments view.
+// The chain of rented arrays lives in a PooledSegment[] that is itself rented from ArrayPool<PooledSegment>.Shared
+// on the first spill, so the writer struct carries a single reference instead of 16 inline array references.
+// The inline form (InlineArray(16) of byte[] + InlineArray(17) of int) made the struct ~240 bytes, and since
+// GC references can never be left uninitialized, every construction paid for zeroing all of it even when the
+// message never left the scratch span. 16 exponentially-growing segments are enough to reach Array.MaxLength.
 
-#if NET9_0_OR_GREATER
-
-[InlineArray(16)]
-internal struct PooledArrays
+/// <summary>One rented array of a pooled-list write buffer and its finished length (meaningful for every segment but the live last one).</summary>
+internal struct PooledSegment
 {
-    public byte[]? value;
+    public byte[]? Array;
+    public int Length;
 }
 
-[InlineArray(17)] // scratch(1) + pooled(16)
-internal struct CompletedLengths
+internal static class PooledSegments
 {
-    public int value;
-}
+    // the segment table always has this many slots; GetMinSegmentSize throws before a 17th segment is ever requested
+    public const int MaxCount = 16;
 
-#else
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public static PooledSegment[] Rent() => ArrayPool<PooledSegment>.Shared.Rent(MaxCount);
 
-internal struct PooledArrays
-{
-    byte[]? _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15;
-
-    public ref byte[]? this[int index]
+    /// <summary>Returns every rented array in <paramref name="segments"/> and the table itself to their pools.</summary>
+    public static void Return(PooledSegment[] segments, int count)
     {
-        [System.Diagnostics.CodeAnalysis.UnscopedRef]
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
+        for (int i = 0; i < count; i++)
         {
-            switch (index)
+            var array = segments[i].Array;
+            if (array != null)
             {
-                case 0: return ref _0;
-                case 1: return ref _1;
-                case 2: return ref _2;
-                case 3: return ref _3;
-                case 4: return ref _4;
-                case 5: return ref _5;
-                case 6: return ref _6;
-                case 7: return ref _7;
-                case 8: return ref _8;
-                case 9: return ref _9;
-                case 10: return ref _10;
-                case 11: return ref _11;
-                case 12: return ref _12;
-                case 13: return ref _13;
-                case 14: return ref _14;
-                case 15: return ref _15;
-                default: Throws.ArgumentOutOfRange(); return ref _0;
+                ArrayPool<byte>.Shared.Return(array);
             }
         }
+        // the table goes back to a shared pool, so drop the array references instead of leaving them to be found by the next renter
+        segments.AsSpan(0, count).Clear();
+        ArrayPool<PooledSegment>.Shared.Return(segments);
     }
 }
-
-internal struct CompletedLengths
-{
-    int _0, _1, _2, _3, _4, _5, _6, _7, _8, _9, _10, _11, _12, _13, _14, _15, _16;
-
-    public ref int this[int index]
-    {
-        [System.Diagnostics.CodeAnalysis.UnscopedRef]
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get
-        {
-            switch (index)
-            {
-                case 0: return ref _0;
-                case 1: return ref _1;
-                case 2: return ref _2;
-                case 3: return ref _3;
-                case 4: return ref _4;
-                case 5: return ref _5;
-                case 6: return ref _6;
-                case 7: return ref _7;
-                case 8: return ref _8;
-                case 9: return ref _9;
-                case 10: return ref _10;
-                case 11: return ref _11;
-                case 12: return ref _12;
-                case 13: return ref _13;
-                case 14: return ref _14;
-                case 15: return ref _15;
-                case 16: return ref _16;
-                default: Throws.ArgumentOutOfRange(); return ref _0;
-            }
-        }
-    }
-}
-
-#endif
 
 // a concrete ref struct works as a parameter type on every TFM (only generic positions need `allows ref struct`),
 
@@ -101,12 +50,11 @@ internal struct CompletedLengths
 public ref struct BufferSegments
 {
     // first (scratch, pre-sliced; empty means "no first segment") followed by
-    // rented arrays with normalized lengths ([i + 1] = finished length of pooled segment i, the last one uses lastPooledLength).
+    // rented arrays ([i].Length = finished length of pooled segment i, the last one uses lastPooledLength).
     // The producers guarantee no pooled segment is empty (the writers replace an untouched array
     // in place rather than finishing it empty, and GetWrittenSegments drops an unwritten tail).
     readonly ReadOnlySpan<byte> first;
-    readonly PooledArrays pooledArrays;
-    readonly CompletedLengths completedLengths;
+    readonly PooledSegment[]? pooled; // non-null whenever pooledCount > 0
     readonly int pooledCount;
     readonly int lastPooledLength;
     readonly long length;
@@ -122,11 +70,10 @@ public ref struct BufferSegments
     public readonly int SegmentCount => (first.Length > 0 ? 1 : 0) + pooledCount;
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal BufferSegments(ReadOnlySpan<byte> first, scoped in PooledArrays pooledArrays, scoped in CompletedLengths completedLengths, int pooledCount, int lastPooledLength, long length)
+    internal BufferSegments(ReadOnlySpan<byte> first, PooledSegment[]? pooled, int pooledCount, int lastPooledLength, long length)
     {
         this.first = first;
-        this.pooledArrays = pooledArrays;
-        this.completedLengths = completedLengths;
+        this.pooled = pooled;
         this.pooledCount = pooledCount;
         this.lastPooledLength = lastPooledLength;
         this.length = length;
@@ -152,10 +99,11 @@ public ref struct BufferSegments
         var pooledIndex = index - 1;
         if ((uint)pooledIndex < (uint)pooledCount)
         {
+            ref var entry = ref pooled![pooledIndex];
             var len = pooledIndex < pooledCount - 1
-                ? completedLengths[pooledIndex + 1]
+                ? entry.Length
                 : lastPooledLength;
-            segment = pooledArrays[pooledIndex]!.AsSpan(0, len);
+            segment = entry.Array!.AsSpan(0, len);
             return true;
         }
 
