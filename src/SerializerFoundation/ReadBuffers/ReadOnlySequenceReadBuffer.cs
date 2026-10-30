@@ -222,7 +222,7 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
     // Span.Length is never negative, so a plain compare against the remaining data covers
     // the guard (Advance needs the unsigned fold only because its argument can be negative).
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CopyTo(Span<byte> destination)
+    public void CopyTo(scoped Span<byte> destination)
     {
         if (destination.Length > length - committedConsumed - currentConsumed)
         {
@@ -241,7 +241,7 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    void CopyToSlow(Span<byte> destination)
+    void CopyToSlow(scoped Span<byte> destination)
     {
         // `sequence` stays positioned at the start of the current window in EVERY state,
         // stitched windows included (TryGetSpanSlow commits before it stitches and never
@@ -416,7 +416,7 @@ public struct CompatibleReadOnlySequenceReadBuffer : IReadBuffer
 
     // stitch-free copy, see ReadOnlySequenceReadBuffer.CopyTo
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CopyTo(Span<byte> destination)
+    public void CopyTo(scoped Span<byte> destination)
     {
         if (destination.Length > length - committedConsumed - currentConsumed)
         {
@@ -433,7 +433,7 @@ public struct CompatibleReadOnlySequenceReadBuffer : IReadBuffer
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    void CopyToSlow(Span<byte> destination)
+    void CopyToSlow(scoped Span<byte> destination)
     {
         sequence.Slice(currentConsumed, destination.Length).CopyTo(destination);
     }

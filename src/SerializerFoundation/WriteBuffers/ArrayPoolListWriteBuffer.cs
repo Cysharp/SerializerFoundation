@@ -150,8 +150,9 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 
     /// <summary>
     /// Copies the written message into <paramref name="destination"/>, which must be at least <see cref="BytesWritten"/> bytes long.
+    /// <paramref name="destination"/> is not retained (it is <c>scoped</c>), so it may be stack memory.
     /// </summary>
-    public void WriteTo(Span<byte> destination)
+    public void WriteTo(scoped Span<byte> destination)
     {
         var segments = pooled;
         if (segments is null)
@@ -359,8 +360,9 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
 
     /// <summary>
     /// Copies the written message into <paramref name="destination"/>, which must be at least <see cref="BytesWritten"/> bytes long.
+    /// <paramref name="destination"/> is not retained (it is <c>scoped</c>), so it may be stack memory.
     /// </summary>
-    public void WriteTo(Span<byte> destination)
+    public void WriteTo(scoped Span<byte> destination)
     {
         var segments = pooled;
         for (int i = 0; i < pooledCount; i++)

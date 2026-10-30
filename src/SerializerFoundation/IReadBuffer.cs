@@ -47,6 +47,8 @@ public interface IReadBuffer : IDisposable
     /// the caller advances afterwards.
     /// Multi-segment implementations copy straight out of their segments without building a contiguous window first.
     /// Throws <see cref="InvalidOperationException"/> when <paramref name="destination"/> is longer than <see cref="BytesRemaining"/>.
+    /// <paramref name="destination"/> is <c>scoped</c>: implementations only copy into it and never retain it, so callers may pass stack memory.
+    /// A ref struct implementation must declare the parameter <c>scoped</c> as well (the compiler reports CS8987 otherwise).
     /// </summary>
-    void CopyTo(Span<byte> destination);
+    void CopyTo(scoped Span<byte> destination);
 }
