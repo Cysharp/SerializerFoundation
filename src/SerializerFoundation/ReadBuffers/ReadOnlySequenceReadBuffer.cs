@@ -34,9 +34,13 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
     public long BytesConsumed => committedConsumed + currentConsumed;
     public long BytesRemaining => length - committedConsumed - currentConsumed;
 
+    // `scoped`: the sequence is copied, never referenced, so the buffer's lifetime must not be tied to the
+    // argument's address. Without it a ref struct result is assumed to capture the `in` reference, and
+    // storing a buffer built from a by-value parameter or a local into a field fails with CS8347.
+
     /// <summary>Creates a read buffer over <paramref name="sequence"/>.</summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySequenceReadBuffer(in ReadOnlySequence<byte> sequence)
+    public ReadOnlySequenceReadBuffer(scoped in ReadOnlySequence<byte> sequence)
         : this(in sequence, default)
     {
     }
@@ -47,7 +51,7 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
     /// instead of renting from the pool.
     /// </summary>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public ReadOnlySequenceReadBuffer(in ReadOnlySequence<byte> sequence, Span<byte> scratch)
+    public ReadOnlySequenceReadBuffer(scoped in ReadOnlySequence<byte> sequence, Span<byte> scratch)
     {
         this.sequence = sequence;
         this.currentSpan = sequence.FirstSpan;
