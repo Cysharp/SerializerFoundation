@@ -52,7 +52,7 @@ public interface IReadBuffer : IDisposable
     void Advance(int bytesConsumed);
 
     // copies the next destination.Length bytes without consuming them
-    void CopyTo(Span<byte> destination);
+    void CopyTo(scoped Span<byte> destination);
 }
 ```
 
@@ -407,7 +407,7 @@ Beyond the built-in `IWriteBuffer` / `IReadBuffer` implementations, you can prov
 | `GetUnreadSpan()` | The unread part of the current contiguous window, any size. Empty only when the data is exhausted; a segmented source repositions onto the next non-empty segment. Never throws, never consumes. Valid until the next `GetUnreadSpan`, `TryGetSpan` or `Dispose`. |
 | `TryGetSpan(sizeHint, out span)` | A contiguous window of at least `sizeHint` bytes, copying across seams as needed, or `false` when fewer remain; `0` always succeeds; negative throws `ArgumentOutOfRangeException`. Never consumes. Same lifetime as `GetUnreadSpan`; a stitched window lives in temporary storage the next request reuses. |
 | `Advance(bytesConsumed)` | Consumes bytes; negative or beyond `BytesRemaining` throws `InvalidOperationException`. Does not invalidate a held span. |
-| `CopyTo(destination)` | Copies the next `destination.Length` bytes without consuming them; longer than `BytesRemaining` throws `InvalidOperationException`. Multi-segment sources copy straight from their segments. |
+| `CopyTo(destination)` | Copies the next `destination.Length` bytes without consuming them; longer than `BytesRemaining` throws `InvalidOperationException`. Multi-segment sources copy straight from their segments. The parameter is `scoped` (never retained, so callers may pass stack memory); a `ref struct` implementation must declare it `scoped` too. |
 | `Dispose()` | Releases temporary storage the buffer rented. Called once by the owner. |
 
 RequireOverride

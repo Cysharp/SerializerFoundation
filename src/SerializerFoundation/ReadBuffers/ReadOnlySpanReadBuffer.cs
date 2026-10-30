@@ -54,7 +54,7 @@ public ref struct ReadOnlySpanReadBuffer : IReadBuffer
     // always contiguous, so this is the one copy the destination inherently needs.
     // Span.Length is never negative, so a plain compare covers the guard.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CopyTo(Span<byte> destination)
+    public void CopyTo(scoped Span<byte> destination)
     {
         if (destination.Length > buffer.Length - consumed)
         {
@@ -123,7 +123,7 @@ public unsafe struct CompatibleReadOnlySpanReadBuffer : IReadBuffer
 
     // always contiguous, see ReadOnlySpanReadBuffer.CopyTo
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public void CopyTo(Span<byte> destination)
+    public void CopyTo(scoped Span<byte> destination)
     {
         if (destination.Length > buffer.Length - consumed)
         {
