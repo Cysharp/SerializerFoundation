@@ -15,6 +15,7 @@ namespace SerializerFoundation;
 /// An <see cref="IReadBuffer"/> over a <see cref="ReadOnlySequence{T}"/>, such as one produced by PipeReader.
 /// Reads operate on each contiguous segment,
 /// and bytes that straddle a segment seam are copied into a temporary buffer to form a contiguous window.
+/// It can also be constructed over a single <see cref="ReadOnlySpan{T}"/>, so one reader type covers both inputs.
 /// Dispose returns any rented buffer and must be called.
 /// </summary>
 public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
@@ -57,6 +58,19 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
         this.currentSpan = sequence.FirstSpan;
         this.scratch = scratch;
         this.length = sequence.Length;
+    }
+
+    /// <summary>
+    /// Creates a read buffer over a single contiguous <paramref name="span"/>,
+    /// so a reader that holds this type can take span input without a second buffer type.
+    /// The whole span is one window: nothing is stitched or rented.
+    /// </summary>
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    public ReadOnlySequenceReadBuffer(ReadOnlySpan<byte> span)
+    {
+        // `sequence` stays default (empty), which tells the slow paths the window already holds every remaining byte
+        this.currentSpan = span;
+        this.length = span.Length;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -111,6 +125,17 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
     [MethodImpl(MethodImplOptions.NoInlining)]
     ReadOnlySpan<byte> CommitAndReposition()
     {
+        if (sequence.IsEmpty)
+        {
+            // The window holds every remaining byte: span-constructed, or a sequence read to the end
+            // (whose window is then empty with nothing pending, since Advance cannot pass the data).
+            // Commit into the window itself; there is no next segment and nothing to stitch.
+            committedConsumed += currentConsumed;
+            currentSpan = currentSpan.Slice((int)currentConsumed);
+            currentConsumed = 0;
+            return currentSpan;
+        }
+
         if (currentConsumed != 0)
         {
             committedConsumed += currentConsumed;
@@ -222,6 +247,7 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
         // stitched windows included (TryGetSpanSlow commits before it stitches and never
         // moves the sequence afterwards), so currentConsumed indexes into it directly.
         // One Slice walk over the segment graph, amortized over the whole payload.
+        // A span-constructed buffer never gets here: its window is all remaining data, so the fast path covers every guarded length.
         sequence.Slice(currentConsumed, destination.Length).CopyTo(destination);
     }
 

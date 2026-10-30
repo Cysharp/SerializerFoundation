@@ -86,6 +86,12 @@ public class ReadBufferCopyToTest
         }
 
         {
+            var buffer = new ReadOnlySequenceReadBuffer(data.AsSpan());
+            try { AssertCopy(ref buffer, data, skip, count); }
+            finally { buffer.Dispose(); }
+        }
+
+        {
             var buffer = new CompatibleReadOnlySequenceReadBuffer(Split(data, 5));
             try { AssertCopy(ref buffer, data, skip, count); }
             finally { buffer.Dispose(); }
@@ -122,6 +128,13 @@ public class ReadBufferCopyToTest
         Assert.Throws<InvalidOperationException>(() =>
         {
             var buffer = new ReadOnlySequenceReadBuffer(Split(data, 5));
+            try { buffer.CopyTo(tooLong); }
+            finally { buffer.Dispose(); }
+        });
+
+        Assert.Throws<InvalidOperationException>(() =>
+        {
+            var buffer = new ReadOnlySequenceReadBuffer(data.AsSpan());
             try { buffer.CopyTo(tooLong); }
             finally { buffer.Dispose(); }
         });
