@@ -222,6 +222,8 @@ finally
 }
 ```
 
+`ReadOnlySequenceReadBuffer` can also be constructed over a single `ReadOnlySpan<byte>`, so a reader type that stores it as its only buffer field accepts both kinds of input. The span is served as one window, never stitched or copied. When the input is always contiguous, `ReadOnlySpanReadBuffer` is still the smaller and simpler choice.
+
 `CopyTo(Span<byte>)` copies the next bytes without consuming them, and a multi-segment implementation copies straight out of its segments without building a contiguous window first. It is the right call for fixed-size payloads such as a `byte[]` body or a blittable struct, where a contiguous window would only be an intermediate copy.
 
 Building a Serializer

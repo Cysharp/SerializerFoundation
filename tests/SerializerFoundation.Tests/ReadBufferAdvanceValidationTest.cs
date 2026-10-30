@@ -73,6 +73,18 @@ public class ReadBufferAdvanceValidationTest
         }
         Assert.True(sequenceThrown, "ReadOnlySequenceReadBuffer");
 
+        var spanBackedThrown = false;
+        {
+            var buffer = new ReadOnlySequenceReadBuffer(data.AsSpan());
+            try
+            {
+                buffer.Advance(bytesConsumed);
+            }
+            catch (InvalidOperationException) { spanBackedThrown = true; }
+            finally { buffer.Dispose(); }
+        }
+        Assert.True(spanBackedThrown, "ReadOnlySequenceReadBuffer over a span");
+
         var compatibleThrown = false;
         {
             var buffer = new CompatibleReadOnlySequenceReadBuffer(new ReadOnlySequence<byte>(data));
@@ -152,6 +164,18 @@ public class ReadBufferAdvanceValidationTest
             finally { buffer.Dispose(); }
         }
         Assert.True(sequenceThrown, "ReadOnlySequenceReadBuffer");
+
+        var spanBackedThrown = false;
+        {
+            var buffer = new ReadOnlySequenceReadBuffer(data.AsSpan());
+            try
+            {
+                buffer.TryGetSpan(sizeHint, out _);
+            }
+            catch (ArgumentOutOfRangeException) { spanBackedThrown = true; }
+            finally { buffer.Dispose(); }
+        }
+        Assert.True(spanBackedThrown, "ReadOnlySequenceReadBuffer over a span");
 
         var compatibleThrown = false;
         {
