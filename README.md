@@ -457,7 +457,7 @@ The package bundles Roslyn analyzers that check the buffer contract at compile t
 | SF002 | Buffer structs are single-owner and must not be copied. A copy diverges silently (two write indexes over one window) and double-returns pooled arrays at Dispose. |
 | SF003 | Virtual methods marked `[RequireOverride]` must be overridden by concrete derived types that can access them. |
 
-SF002 is the one you will meet. Implementing a buffer interface is the non-copyable marker, no attribute needed. The analyzer catches common copy mistakes in serializer code: by-value parameters and extension receivers, `in` / `ref readonly` parameters (the callee mutates a defensive copy), local and field initialization from another buffer, boxing, capture in a tuple or array initializer, `foreach`, pattern matching, `with`, by-value properties, yielding an existing buffer, and mutation through a `readonly` reference. It is a guard against common mistakes, not a complete ownership checker: callers still need to keep buffers single-owner and pass them by `ref`.
+SF002 is the one you will meet. Implementing a buffer interface is the non-copyable marker, so buffers need no attribute. A struct that is not a buffer but holds one by value, such as a serializer's reader or writer, opts in with `[NonCopyable]` (`SerializerFoundation.CodeAnalysis`) and is checked by the same rules. The analyzer catches common copy mistakes in serializer code: by-value parameters and extension receivers, `in` / `ref readonly` parameters (the callee mutates a defensive copy), local and field initialization from another buffer, boxing, capture in a tuple or array initializer, `foreach`, pattern matching, `with`, by-value properties, yielding an existing buffer, and mutation through a `readonly` reference. It is a guard against common mistakes, not a complete ownership checker: callers still need to keep buffers single-owner and pass them by `ref`.
 
 ```csharp
 void ByValue(ArrayPoolListWriteBuffer buffer) { }    // SF002
@@ -466,6 +466,12 @@ void ByRef(ref ArrayPoolListWriteBuffer buffer) { }  // OK
 
 var buffer = new ArrayPoolListWriteBuffer(scratch); // OK: constructed in place
 var copy = buffer;                                 // SF002: copied by assignment
+
+[NonCopyable]
+public ref struct MyWriter<TBuffer> where TBuffer : struct, IWriteBuffer, allows ref struct
+{
+    TBuffer buffer; // a copy of MyWriter would copy the buffer too, so MyWriter follows the same rules
+}
 ```
 
 The analyzers ship inside the SerializerFoundation package under `analyzers/dotnet/cs` and require a host compatible with Roslyn 4.3.1 or later. A direct `PackageReference` loads them automatically. Transitive references are different: NuGet's default `PrivateAssets` (`contentfiles;analyzers;build`) writes `exclude="Build,Analyzers"` into the dependency entry of any package that references SerializerFoundation, so applications that only reference that package never load the analyzers. **If you publish a library that depends on SerializerFoundation, always reference it with `PrivateAssets="none"`** so the analyzers reach your users:
