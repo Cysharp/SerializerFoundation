@@ -7,7 +7,7 @@ using SerializerFoundation.Analyzers;
 namespace SerializerFoundation.Tests;
 
 // Copy-rule coverage over the corlib-stub world: any struct implementing a buffer
-// interface is single-owner; moves (fresh values) are allowed, copies are flagged.
+// interface (or marked [NonCopyable]) is single-owner; moves (fresh values) are allowed, copies are flagged.
 public class NonCopyableBufferAnalyzerTest
 {
     const string CorlibStub = """
@@ -82,6 +82,10 @@ public class NonCopyableBufferAnalyzerTest
         {
             public interface IWriteBuffer : System.IDisposable { }
             public interface IReadBuffer : System.IDisposable { }
+        }
+        namespace SerializerFoundation.CodeAnalysis
+        {
+            public sealed class NonCopyableAttribute : System.Attribute { }
         }
         """;
 
@@ -1009,5 +1013,128 @@ public class NonCopyableBufferAnalyzerTest
         var diagnostics = await RunAnalyzerAsync(source);
         var diagnostic = Assert.Single(diagnostics);
         Assert.Contains("using statement", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task MarkedStruct_CopiesReport()
+    {
+        // a reader/writer that holds a buffer by value implements no buffer interface,
+        // so [NonCopyable] is what opts it into the same rules
+        const string source = """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct Writer
+            {
+                public MyBuffer buffer;
+            }
+
+            public static class Code
+            {
+                public static void ByValue(Writer writer) { }
+                public static void ByRef(ref Writer writer) { }
+
+                public static void Run()
+                {
+                    var a = new Writer();
+                    var b = a;
+                    ByRef(ref a);
+                    object boxed = a;
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source);
+        Assert.Equal(3, diagnostics.Length);
+        Assert.All(diagnostics, d => Assert.Contains("'Writer'", d.GetMessage()));
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("received by value"));
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("copied by assignment"));
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("boxed"));
+    }
+
+    [Fact]
+    public async Task MarkedGenericStruct_ConstructedCopiesReport()
+    {
+        const string source = """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct Writer<TBuffer> where TBuffer : struct, SerializerFoundation.IWriteBuffer
+            {
+                public TBuffer buffer;
+            }
+
+            public static class Code
+            {
+                public static void Take<TBuffer>(Writer<TBuffer> writer) where TBuffer : struct, SerializerFoundation.IWriteBuffer { }
+
+                public static void Run()
+                {
+                    var a = new Writer<MyBuffer>();
+                    var b = a;
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source);
+        Assert.Equal(2, diagnostics.Length);
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("received by value"));
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("copied by assignment"));
+    }
+
+    [Fact]
+    public async Task MarkedStructFromMetadata_Reports()
+    {
+        // the usual shape: the serializer library declares the marked reader, user code in another assembly copies it
+        const string source = """
+            public static class Code
+            {
+                public static void Run()
+                {
+                    var a = new Reader();
+                    var b = a;
+                }
+            }
+            """;
+        var corlib = CompileStub("corlibstub", CorlibStub);
+        var coreLibrary = CompileStub("MessagePack", CoreLibraryStub, corlib);
+        var serializer = CompileStub("Serializer", """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct Reader
+            {
+                int consumed;
+            }
+            """, corlib, coreLibrary);
+        var compilation = CSharpCompilation.Create(
+            "UserAssembly",
+            [CSharpSyntaxTree.ParseText(source)],
+            [corlib, coreLibrary, serializer],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.Empty(compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+        var diagnostics = await compilation.WithAnalyzers([new NonCopyableBufferAnalyzer()]).GetAnalyzerDiagnosticsAsync(CancellationToken.None);
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("copied by assignment", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task ForeignNonCopyableAttribute_Silent()
+    {
+        // only SerializerFoundation's attribute opts a struct in; a same-named marker from elsewhere carries its own semantics
+        const string source = """
+            namespace Other
+            {
+                public sealed class NonCopyableAttribute : System.Attribute { }
+            }
+
+            [Other.NonCopyable]
+            public struct Writer { }
+
+            public static class Code
+            {
+                public static void ByValue(Writer writer) { }
+
+                public static void Run()
+                {
+                    var a = new Writer();
+                    var b = a;
+                }
+            }
+            """;
+        Assert.Empty(await RunAnalyzerAsync(source));
     }
 }

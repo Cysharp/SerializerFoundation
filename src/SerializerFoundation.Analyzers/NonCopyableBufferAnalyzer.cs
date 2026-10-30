@@ -11,8 +11,9 @@ namespace SerializerFoundation.Analyzers;
 /// Every struct implementing IWriteBuffer/IReadBuffer is single-owner mutable state,
 /// a copy diverges silently (two write indexes over one window) and double-returns pooled arrays at Dispose.
 /// The BCL declined a general [NonCopyable] (dotnet/runtime#50389),
-/// and for this library no attribute is needed anyway: implementing a buffer interface IS the non-copyable marker,
-/// so the analyzer keys directly on that.
+/// and buffers need no attribute: implementing a buffer interface IS the non-copyable marker,
+/// so the analyzer keys directly on that. SerializerFoundation's own [NonCopyable] covers the one shape the
+/// interfaces cannot see, a struct that is not a buffer but holds one by value (a serializer's reader or writer).
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
@@ -47,11 +48,11 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
     static readonly DiagnosticDescriptor Rule = new(
         DiagnosticId,
         "Buffer structs are single-owner and must not be copied",
-        "'{0}' implements a buffer interface and must not be {1}; buffers are single-owner - pass by ref or construct in place",
+        "'{0}' is a single-owner struct (a buffer, or marked [NonCopyable]) and must not be {1}; pass by ref or construct in place",
         "SerializerFoundation.Correctness",
         DiagnosticSeverity.Error, // this must not allow silent divergence of mutable state, so it's an error, not a warning
         isEnabledByDefault: true,
-        description: "Structs implementing IWriteBuffer/IReadBuffer (or the async flavors) hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
+        description: "Structs implementing IWriteBuffer/IReadBuffer (or the async flavors) hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Structs marked [NonCopyable] (typically a reader or writer that holds a buffer by value) follow the same rules. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
@@ -62,42 +63,33 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
 
         context.RegisterCompilationStartAction(static startContext =>
         {
-            var interfaces = ImmutableArray.CreateRange(
-                new[]
-                {
-                    "SerializerFoundation.IWriteBuffer",
-                    "SerializerFoundation.IReadBuffer",
-                }
-                .Select(startContext.Compilation.GetTypeByMetadataName)
-                .Where(static symbol => symbol is not null)
-                .Select(static symbol => symbol!));
-            if (interfaces.IsEmpty)
+            if (NonCopyableTypes.Create(startContext.Compilation) is not { } types)
             {
                 return;
             }
 
             startContext.RegisterOperationAction(
-                context => AnalyzeAssignment(context, interfaces),
+                context => AnalyzeAssignment(context, types),
                 OperationKind.SimpleAssignment,
                 OperationKind.VariableDeclarator,
                 OperationKind.FieldInitializer);
             startContext.RegisterOperationAction(
-                context => AnalyzeArgument(context, interfaces),
+                context => AnalyzeArgument(context, types),
                 OperationKind.Argument);
             startContext.RegisterOperationAction(
-                context => AnalyzeConversion(context, interfaces),
+                context => AnalyzeConversion(context, types),
                 OperationKind.Conversion);
             startContext.RegisterOperationAction(
-                context => AnalyzeParameters(context, ((ILocalFunctionOperation)context.Operation).Symbol, interfaces),
+                context => AnalyzeParameters(context, ((ILocalFunctionOperation)context.Operation).Symbol, types),
                 OperationKind.LocalFunction);
             startContext.RegisterOperationAction(
-                context => AnalyzeParameters(context, ((IAnonymousFunctionOperation)context.Operation).Symbol, interfaces),
+                context => AnalyzeParameters(context, ((IAnonymousFunctionOperation)context.Operation).Symbol, types),
                 OperationKind.AnonymousFunction);
             startContext.RegisterSymbolAction(
-                context => AnalyzeParameters(context, (IMethodSymbol)context.Symbol, interfaces),
+                context => AnalyzeParameters(context, (IMethodSymbol)context.Symbol, types),
                 SymbolKind.Method);
             startContext.RegisterSyntaxNodeAction(
-                context => AnalyzeExtensionReceiver(context, interfaces),
+                context => AnalyzeExtensionReceiver(context, types),
                 SyntaxKind.Parameter);
             // delegate Invoke is implicitly declared, so the Method symbol action never
             // sees it; the delegate TYPE is the source-declared symbol to hook
@@ -106,47 +98,47 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
                 {
                     if (((INamedTypeSymbol)context.Symbol).DelegateInvokeMethod is { } invoke)
                     {
-                        AnalyzeParameters(context, invoke, interfaces);
+                        AnalyzeParameters(context, invoke, types);
                     }
                 },
                 SymbolKind.NamedType);
             startContext.RegisterSymbolAction(
-                context => AnalyzeProperty(context, interfaces),
+                context => AnalyzeProperty(context, types),
                 SymbolKind.Property);
             startContext.RegisterOperationAction(
-                context => AnalyzeReturn(context, interfaces),
+                context => AnalyzeReturn(context, types),
                 OperationKind.Return,
                 OperationKind.YieldReturn);
             startContext.RegisterOperationAction(
-                context => AnalyzeForEach(context, interfaces),
+                context => AnalyzeForEach(context, types),
                 OperationKind.Loop);
             startContext.RegisterOperationAction(
-                context => AnalyzePattern(context, interfaces),
+                context => AnalyzePattern(context, types),
                 OperationKind.DeclarationPattern,
                 OperationKind.RecursivePattern);
             startContext.RegisterOperationAction(
-                context => AnalyzeWith(context, interfaces),
+                context => AnalyzeWith(context, types),
                 OperationKind.With);
             startContext.RegisterOperationAction(
-                context => AnalyzeTuple(context, interfaces),
+                context => AnalyzeTuple(context, types),
                 OperationKind.Tuple);
             // KNOWN GAP: C#12 collection-expression elements ([a]) need
             // ICollectionExpressionOperation, which arrived after the deliberate
             // Microsoft.CodeAnalysis 4.3.1 floor (see the csproj comment); wire it up when
             // the floor moves to 4.10+
             startContext.RegisterOperationAction(
-                context => AnalyzeCollectionElements(context, ((IArrayInitializerOperation)context.Operation).ElementValues, interfaces),
+                context => AnalyzeCollectionElements(context, ((IArrayInitializerOperation)context.Operation).ElementValues, types),
                 OperationKind.ArrayInitializer);
             startContext.RegisterOperationAction(
-                context => AnalyzeUsing(context, interfaces),
+                context => AnalyzeUsing(context, types),
                 OperationKind.Using);
             startContext.RegisterOperationAction(
-                context => AnalyzeReadOnlyReceiver(context, interfaces),
+                context => AnalyzeReadOnlyReceiver(context, types),
                 OperationKind.Invocation);
         });
     }
 
-    static void AnalyzeAssignment(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeAssignment(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var (target, value) = context.Operation switch
         {
@@ -157,17 +149,17 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
                 => (field.InitializedFields[0].Type, field.Value),
             _ => (null, null),
         };
-        if (target is null || value is null || !IsBufferStruct(target, interfaces) || IsFreshValue(value))
+        if (target is null || value is null || !types.IsNonCopyable(target) || IsFreshValue(value))
         {
             return;
         }
         context.ReportDiagnostic(Diagnostic.Create(Rule, value.Syntax.GetLocation(), target.Name, "copied by assignment"));
     }
 
-    static void AnalyzeArgument(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeArgument(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var argument = (IArgumentOperation)context.Operation;
-        if (argument.Parameter is not { } parameter || argument.Value.Type is not { } type || !IsBufferStruct(type, interfaces))
+        if (argument.Parameter is not { } parameter || argument.Value.Type is not { } type || !types.IsNonCopyable(type))
         {
             return;
         }
@@ -186,10 +178,10 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, argument.Syntax.GetLocation(), type.Name, "passed by value"));
     }
 
-    static void AnalyzeConversion(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeConversion(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var conversion = (IConversionOperation)context.Operation;
-        if (conversion.Operand.Type is not { } operandType || !IsBufferStruct(operandType, interfaces))
+        if (conversion.Operand.Type is not { } operandType || !types.IsNonCopyable(operandType))
         {
             return;
         }
@@ -205,7 +197,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         }
     }
 
-    static void AnalyzeParameters(DiagnosticReporter context, IMethodSymbol method, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeParameters(DiagnosticReporter context, IMethodSymbol method, NonCopyableTypes types)
     {
         if (method.MethodKind is not (MethodKind.Ordinary or MethodKind.ExplicitInterfaceImplementation or MethodKind.LocalFunction or MethodKind.Constructor
             or MethodKind.AnonymousFunction or MethodKind.DelegateInvoke or MethodKind.UserDefinedOperator or MethodKind.Conversion))
@@ -214,11 +206,11 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         }
         foreach (var parameter in method.Parameters)
         {
-            AnalyzeParameter(context, parameter, interfaces);
+            AnalyzeParameter(context, parameter, types);
         }
     }
 
-    static void AnalyzeExtensionReceiver(SyntaxNodeAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeExtensionReceiver(SyntaxNodeAnalysisContext context, NonCopyableTypes types)
     {
         // A C# 14 extension receiver belongs to the extension's named type, not to
         // any member's parameter list. ParameterSyntax and GetDeclaredSymbol work
@@ -228,15 +220,15 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             extension.GetMembers().Any(static member => !member.IsStatic))
         {
             // Static extension members do not receive an instance or copy the buffer.
-            AnalyzeParameter(context, parameter, interfaces);
+            AnalyzeParameter(context, parameter, types);
         }
     }
 
-    static void AnalyzeParameter(DiagnosticReporter context, IParameterSymbol parameter, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeParameter(DiagnosticReporter context, IParameterSymbol parameter, NonCopyableTypes types)
     {
         // ref and out are the only sanctioned shapes: a buffer's members are mutating, so an
         // in / ref readonly parameter acts on a hidden defensive copy when mutated.
-        if (parameter.RefKind is not (RefKind.None or RefKind.In or RefReadOnlyParameter) || !IsBufferStruct(parameter.Type, interfaces))
+        if (parameter.RefKind is not (RefKind.None or RefKind.In or RefReadOnlyParameter) || !types.IsNonCopyable(parameter.Type))
         {
             return;
         }
@@ -250,10 +242,10 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
     // the getter of a by-value property hands out a COPY on every access, so
     // `x.Buffer.Dispose()` silently disposes a temporary — no other rule can see that,
     // because no assignment/argument/conversion is involved at the use site
-    static void AnalyzeProperty(SymbolAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeProperty(SymbolAnalysisContext context, NonCopyableTypes types)
     {
         var property = (IPropertySymbol)context.Symbol;
-        if (property.RefKind != RefKind.None || !IsBufferStruct(property.Type, interfaces))
+        if (property.RefKind != RefKind.None || !types.IsNonCopyable(property.Type))
         {
             return;
         }
@@ -267,11 +259,11 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
     // storage itself and are exempt. A `using` local is the exception among locals: the
     // frame disposes it on exit, so the caller receives a copy of a dead buffer (and the
     // pooled state behind it is returned twice).
-    static void AnalyzeReturn(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeReturn(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var returnOperation = (IReturnOperation)context.Operation;
         if (returnOperation.ReturnedValue is not { Type: { } type } value ||
-            !IsBufferStruct(type, interfaces) ||
+            !types.IsNonCopyable(type) ||
             context.ContainingSymbol is IMethodSymbol { RefKind: not RefKind.None })
         {
             return;
@@ -301,13 +293,13 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, value.Syntax.GetLocation(), type.Name, "returned by value from existing storage (return a fresh value or return by ref)"));
     }
 
-    static void AnalyzeForEach(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeForEach(OperationAnalysisContext context, NonCopyableTypes types)
     {
         if (context.Operation is not IForEachLoopOperation { LoopControlVariable: IVariableDeclaratorOperation { Symbol: { } local } })
         {
             return;
         }
-        if (local.RefKind != RefKind.None || !IsBufferStruct(local.Type, interfaces))
+        if (local.RefKind != RefKind.None || !types.IsNonCopyable(local.Type))
         {
             return;
         }
@@ -315,7 +307,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, location, local.Type.Name, "copied by foreach (iterate by ref, or index the collection)"));
     }
 
-    static void AnalyzePattern(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzePattern(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var declared = context.Operation switch
         {
@@ -323,7 +315,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             IRecursivePatternOperation pattern => pattern.DeclaredSymbol as ILocalSymbol,
             _ => null,
         };
-        if (declared is null || !IsBufferStruct(declared.Type, interfaces))
+        if (declared is null || !types.IsNonCopyable(declared.Type))
         {
             return;
         }
@@ -331,10 +323,10 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, location, declared.Type.Name, "copied by a pattern match"));
     }
 
-    static void AnalyzeWith(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeWith(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var with = (IWithOperation)context.Operation;
-        if (with.Operand.Type is { } type && IsBufferStruct(type, interfaces))
+        if (with.Operand.Type is { } type && types.IsNonCopyable(type))
         {
             context.ReportDiagnostic(Diagnostic.Create(Rule, with.Syntax.GetLocation(), type.Name, "copied by a with-expression"));
         }
@@ -342,24 +334,24 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
 
     // even a FRESH buffer is flagged here: the tuple itself is not a buffer type, so
     // every subsequent tuple copy would duplicate the buffer invisibly to all rules
-    static void AnalyzeTuple(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeTuple(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var tuple = (ITupleOperation)context.Operation;
         foreach (var element in tuple.Elements)
         {
-            if (Unwrap(element).Type is { } type && IsBufferStruct(type, interfaces))
+            if (Unwrap(element).Type is { } type && types.IsNonCopyable(type))
             {
                 context.ReportDiagnostic(Diagnostic.Create(Rule, element.Syntax.GetLocation(), type.Name, "captured in a tuple (tuples copy freely and hide the buffer)"));
             }
         }
     }
 
-    static void AnalyzeCollectionElements(OperationAnalysisContext context, IEnumerable<IOperation> elements, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeCollectionElements(OperationAnalysisContext context, IEnumerable<IOperation> elements, NonCopyableTypes types)
     {
         foreach (var element in elements)
         {
             var unwrapped = Unwrap(element);
-            if (unwrapped.Type is { } type && IsBufferStruct(type, interfaces) && !IsFreshValue(unwrapped))
+            if (unwrapped.Type is { } type && types.IsNonCopyable(type) && !IsFreshValue(unwrapped))
             {
                 context.ReportDiagnostic(Diagnostic.Create(Rule, element.Syntax.GetLocation(), type.Name, "copied into a collection"));
             }
@@ -368,7 +360,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
 
     // `using (a)` copies the resource into a hidden slot and disposes THAT; the
     // declaration form (`using var a = ...;`) is handled by the assignment rule
-    static void AnalyzeUsing(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeUsing(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var usingOperation = (IUsingOperation)context.Operation;
         if (usingOperation.Resources is IVariableDeclarationGroupOperation)
@@ -376,7 +368,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             return;
         }
         var resource = Unwrap(usingOperation.Resources);
-        if (resource.Type is { } type && IsBufferStruct(type, interfaces) && !IsFreshValue(resource))
+        if (resource.Type is { } type && types.IsNonCopyable(type) && !IsFreshValue(resource))
         {
             context.ReportDiagnostic(Diagnostic.Create(Rule, resource.Syntax.GetLocation(), type.Name, "copied by a using statement (declare the resource inside the using)"));
         }
@@ -387,13 +379,13 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
     // member) cannot be mutated in place: the compiler runs every non-readonly member on
     // a hidden defensive copy, so the write index advances on a temporary and the real
     // buffer never moves. The `in`-parameter form is already reported at its declaration.
-    static void AnalyzeReadOnlyReceiver(OperationAnalysisContext context, ImmutableArray<INamedTypeSymbol> interfaces)
+    static void AnalyzeReadOnlyReceiver(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var invocation = (IInvocationOperation)context.Operation;
         if (invocation.TargetMethod.IsStatic ||
             invocation.TargetMethod.IsReadOnly ||
             invocation.Instance is not { Type: { } receiverType } receiver ||
-            !IsBufferStruct(receiverType, interfaces) ||
+            !types.IsNonCopyable(receiverType) ||
             receiver is IParameterReferenceOperation ||
             !IsReadOnlyReference(receiver, context.ContainingSymbol))
         {
@@ -479,42 +471,91 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         };
     }
 
-    static bool IsBufferStruct(ITypeSymbol type, ImmutableArray<INamedTypeSymbol> interfaces)
+    /// <summary>The single-owner set: buffer structs (and type parameters constrained to a buffer interface) plus structs marked [NonCopyable].</summary>
+    sealed class NonCopyableTypes
     {
-        if (type is ITypeParameterSymbol typeParameter)
+        readonly ImmutableArray<INamedTypeSymbol> interfaces;
+        readonly INamedTypeSymbol? attribute;
+
+        NonCopyableTypes(ImmutableArray<INamedTypeSymbol> interfaces, INamedTypeSymbol? attribute)
         {
-            foreach (var constraint in typeParameter.ConstraintTypes)
+            this.interfaces = interfaces;
+            this.attribute = attribute;
+        }
+
+        public static NonCopyableTypes? Create(Compilation compilation)
+        {
+            var interfaces = ImmutableArray.CreateRange(
+                new[]
+                {
+                    "SerializerFoundation.IWriteBuffer",
+                    "SerializerFoundation.IReadBuffer",
+                }
+                .Select(compilation.GetTypeByMetadataName)
+                .Where(static symbol => symbol is not null)
+                .Select(static symbol => symbol!));
+            // keyed on SerializerFoundation's own attribute, not on the name: a [NonCopyable] from another
+            // library carries that library's semantics, which this rule set does not claim to enforce
+            var attribute = compilation.GetTypeByMetadataName("SerializerFoundation.CodeAnalysis.NonCopyableAttribute");
+            return interfaces.IsEmpty && attribute is null ? null : new(interfaces, attribute);
+        }
+
+        public bool IsNonCopyable(ITypeSymbol type)
+        {
+            // the attribute only targets structs, which cannot be constraints, so a type
+            // parameter is single-owner only through a buffer interface constraint
+            if (type is ITypeParameterSymbol typeParameter)
             {
-                if (IsOrImplementsBufferInterface(constraint, interfaces))
+                foreach (var constraint in typeParameter.ConstraintTypes)
+                {
+                    if (IsOrImplementsBufferInterface(constraint))
+                    {
+                        return true;
+                    }
+                }
+                return false;
+            }
+            return type.IsValueType && (IsOrImplementsBufferInterface(type) || IsMarked(type));
+        }
+
+        bool IsOrImplementsBufferInterface(ITypeSymbol type)
+        {
+            foreach (var bufferInterface in interfaces)
+            {
+                if (SymbolEqualityComparer.Default.Equals(type, bufferInterface))
+                {
+                    return true;
+                }
+            }
+            foreach (var implemented in type.AllInterfaces)
+            {
+                foreach (var bufferInterface in interfaces)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(implemented, bufferInterface))
+                    {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+
+        bool IsMarked(ITypeSymbol type)
+        {
+            if (attribute is null)
+            {
+                return false;
+            }
+            // a constructed generic (Writer<SomeBuffer>) carries the attribute on its definition
+            foreach (var data in type.OriginalDefinition.GetAttributes())
+            {
+                if (SymbolEqualityComparer.Default.Equals(data.AttributeClass, attribute))
                 {
                     return true;
                 }
             }
             return false;
         }
-        return type.IsValueType && IsOrImplementsBufferInterface(type, interfaces);
-    }
-
-    static bool IsOrImplementsBufferInterface(ITypeSymbol type, ImmutableArray<INamedTypeSymbol> interfaces)
-    {
-        foreach (var bufferInterface in interfaces)
-        {
-            if (SymbolEqualityComparer.Default.Equals(type, bufferInterface))
-            {
-                return true;
-            }
-        }
-        foreach (var implemented in type.AllInterfaces)
-        {
-            foreach (var bufferInterface in interfaces)
-            {
-                if (SymbolEqualityComparer.Default.Equals(implemented, bufferInterface))
-                {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 
     /// <summary>Adapter so parameter checks share code between symbol, syntax and operation contexts.</summary>
