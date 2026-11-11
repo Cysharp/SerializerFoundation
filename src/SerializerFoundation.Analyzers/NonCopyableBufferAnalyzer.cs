@@ -52,7 +52,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         "SerializerFoundation.Correctness",
         DiagnosticSeverity.Error, // this must not allow silent divergence of mutable state, so it's an error, not a warning
         isEnabledByDefault: true,
-        description: "Structs implementing IWriteBuffer/IReadBuffer (or the async flavors) hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Structs marked [NonCopyable] (typically a reader or writer that holds a buffer by value) follow the same rules. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
+        description: "Structs implementing IWriteBuffer/IReadBuffer hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Structs marked [NonCopyable] (typically a reader or writer that holds a buffer by value) follow the same rules. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
@@ -245,6 +245,12 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
     static void AnalyzeProperty(SymbolAnalysisContext context, NonCopyableTypes types)
     {
         var property = (IPropertySymbol)context.Symbol;
+        // an indexer receives its parameters exactly as a method does; the accessors are not
+        // ordinary methods, so the method rule never sees them
+        foreach (var parameter in property.Parameters)
+        {
+            AnalyzeParameter(context, parameter, types);
+        }
         if (property.RefKind != RefKind.None || !types.IsNonCopyable(property.Type))
         {
             return;
@@ -264,7 +270,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         var returnOperation = (IReturnOperation)context.Operation;
         if (returnOperation.ReturnedValue is not { Type: { } type } value ||
             !types.IsNonCopyable(type) ||
-            context.ContainingSymbol is IMethodSymbol { RefKind: not RefKind.None })
+            GetReturningMethod(returnOperation, context.ContainingSymbol) is { RefKind: not RefKind.None })
         {
             return;
         }
@@ -291,6 +297,25 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             return;
         }
         context.ReportDiagnostic(Diagnostic.Create(Rule, value.Syntax.GetLocation(), type.Name, "returned by value from existing storage (return a fresh value or return by ref)"));
+    }
+
+    // The method a return statement returns FROM. Operation callbacks report the outer member as the containing
+    // symbol even inside a lambda or local function, so the nearest enclosing function has to be found by walking
+    // up: a ref-returning local function inside an ordinary method returns storage, not a copy, and a by-value
+    // local function inside a ref-returning method copies.
+    static IMethodSymbol? GetReturningMethod(IOperation operation, ISymbol containingSymbol)
+    {
+        for (var parent = operation.Parent; parent is not null; parent = parent.Parent)
+        {
+            switch (parent)
+            {
+                case ILocalFunctionOperation localFunction:
+                    return localFunction.Symbol;
+                case IAnonymousFunctionOperation anonymousFunction:
+                    return anonymousFunction.Symbol;
+            }
+        }
+        return containingSymbol as IMethodSymbol;
     }
 
     static void AnalyzeForEach(OperationAnalysisContext context, NonCopyableTypes types)
@@ -455,15 +480,17 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         return value;
     }
 
-    // fresh values transfer ownership (move, not copy): construction, default, and
-    // by-value method returns; everything read from an existing storage location is a copy.
+    // fresh values transfer ownership (move, not copy): construction (`new T()` on a type parameter included),
+    // default, by-value method returns and awaited results; everything read from an existing storage location is a copy.
     // A ref-returning method hands out existing storage, so receiving its result by value
     // dereferences and copies, same as reading a field.
+    // A throw expression yields no value at all, so as an arm of a conditional or switch expression it copies nothing.
     static bool IsFreshValue(IOperation value)
     {
         return Unwrap(value) switch
         {
-            IObjectCreationOperation or IDefaultValueOperation or ILiteralOperation => true,
+            IObjectCreationOperation or ITypeParameterObjectCreationOperation or IDefaultValueOperation or ILiteralOperation => true,
+            IAwaitOperation or IThrowOperation => true,
             IInvocationOperation invocation => invocation.TargetMethod.RefKind == RefKind.None,
             IConditionalOperation { WhenFalse: { } whenFalse } conditional => IsFreshValue(conditional.WhenTrue) && IsFreshValue(whenFalse),
             ISwitchExpressionOperation switchExpression => switchExpression.Arms.All(static arm => IsFreshValue(arm.Value)),

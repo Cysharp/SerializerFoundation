@@ -75,8 +75,7 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
 
         if (currentBuffer.Length - currentWritten < sizeHint)
         {
-            // the segment table is rented on the first spill
-            var segments = pooled ??= PooledSegments.Rent();
+            var segments = pooled;
 
             if (pooledCount > 0 && currentWritten == 0)
             {
@@ -85,7 +84,7 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
                 // (rent before return so a failed Rent never leaves a returned array in the slot)
                 var slot = pooledCount - 1;
                 var replacement = ArrayPool<byte>.Shared.Rent(Math.Max(sizeHint, GetMinSegmentSize(slot)));
-                ArrayPool<byte>.Shared.Return(segments[slot].Array!);
+                ArrayPool<byte>.Shared.Return(segments![slot].Array!);
                 segments[slot].Array = replacement;
                 currentBuffer = replacement;
                 return replacement;
@@ -96,6 +95,12 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             var minSize = GetMinSegmentSize(pooledCount);
             var requiredSize = Math.Max(sizeHint, minSize);
             var newArray = ArrayPool<byte>.Shared.Rent(requiredSize);
+
+            // The segment table is rented on the first spill, and only after the array above: ToArray, WriteTo and
+            // GetWrittenSegments read `pooled != null` as "the scratch span is finished", so a table left behind by
+            // a spill whose array Rent then threw would make them skip everything still sitting in the scratch span.
+            // (If this Rent throws instead, newArray is simply never returned to the pool and the GC collects it.)
+            segments ??= pooled = PooledSegments.Rent();
 
             // finish current segment (the scratch span on the first spill, possibly at length 0)
             if (pooledCount == 0)
@@ -126,7 +131,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         currentWritten += bytesWritten;
     }
 
-    /// <summary>Copies the written message into a new array.</summary>
+    /// <summary>
+    /// Copies the written message into a new array.
+    /// Throws <see cref="InvalidOperationException"/> when the message is longer than the largest possible array;
+    /// <see cref="GetWrittenSegments"/> still reaches all of it.
+    /// </summary>
     public byte[] ToArray()
     {
         if (pooled is null)
@@ -140,7 +149,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             return array;
         }
 
-        var totalLength = checked((int)BytesWritten);
+        // the chain can hold more than one array can: name the problem here rather than
+        // surfacing an arithmetic overflow or an allocation failure
+        var total = BytesWritten;
+        if (total > Array.MaxLength) Throws.MessageTooLargeForArray();
+        var totalLength = (int)total;
         if (totalLength == 0) return [];
 
         var result = GC.AllocateUninitializedArray<byte>(totalLength);
@@ -293,8 +306,7 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         var array = currentArray;
         if (array == null || array.Length - currentWritten < sizeHint)
         {
-            // the segment table is rented together with the first array
-            var segments = pooled ??= PooledSegments.Rent();
+            var segments = pooled;
 
             if (pooledCount > 0 && currentWritten == 0)
             {
@@ -303,7 +315,7 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
                 var slot = pooledCount - 1;
                 var replacement = ArrayPool<byte>.Shared.Rent(Math.Max(sizeHint, GetMinSegmentSize(slot)));
                 ArrayPool<byte>.Shared.Return(array!);
-                segments[slot].Array = replacement;
+                segments![slot].Array = replacement;
                 currentArray = replacement;
                 return replacement;
             }
@@ -313,6 +325,10 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
             var minSize = GetMinSegmentSize(pooledCount);
             var requiredSize = Math.Max(sizeHint, minSize);
             array = ArrayPool<byte>.Shared.Rent(requiredSize);
+
+            // the segment table is rented together with the first array, and only after it: a table without an
+            // array (`pooled != null` with pooledCount == 0) is a state GetWrittenSegments cannot describe, see the ref variant
+            segments ??= pooled = PooledSegments.Rent();
 
             // finish current segment
             if (pooledCount > 0)
@@ -347,10 +363,17 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         currentWritten += bytesWritten;
     }
 
-    /// <summary>Copies the written message into a new array.</summary>
+    /// <summary>
+    /// Copies the written message into a new array.
+    /// Throws <see cref="InvalidOperationException"/> when the message is longer than the largest possible array;
+    /// <see cref="GetWrittenSegments"/> still reaches all of it.
+    /// </summary>
     public byte[] ToArray()
     {
-        var totalLength = checked((int)BytesWritten);
+        // same guard as the ref variant
+        var total = BytesWritten;
+        if (total > Array.MaxLength) Throws.MessageTooLargeForArray();
+        var totalLength = (int)total;
         if (totalLength == 0) return [];
 
         var result = GC.AllocateUninitializedArray<byte>(totalLength);

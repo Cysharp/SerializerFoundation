@@ -246,8 +246,24 @@ public ref struct ReadOnlySequenceReadBuffer : IReadBuffer
         // `sequence` stays positioned at the start of the current window in EVERY state,
         // stitched windows included (TryGetSpanSlow commits before it stitches and never
         // moves the sequence afterwards), so currentConsumed indexes into it directly.
-        // One Slice walk over the segment graph, amortized over the whole payload.
         // A span-constructed buffer never gets here: its window is all remaining data, so the fast path covers every guarded length.
+        if (currentConsumed >= currentSpan.Length)
+        {
+            // The window is used up (or a skip ran past it), so commit first. Advance never commits, so without
+            // this a CopyTo + Advance loop that requests no window in between would keep the sequence parked at
+            // the old window start while currentConsumed grows, and every Slice below would re-walk all the
+            // segments already consumed: quadratic in the segment count.
+            // The commit moves only the sequence position and the window, never scratch or the temp, so a span
+            // the caller still holds stays valid as the interface promises.
+            var window = CommitAndReposition();
+            if (window.Length >= destination.Length)
+            {
+                // the payload sits inside the new window, no second walk needed
+                window.Slice(0, destination.Length).CopyTo(destination);
+                return;
+            }
+        }
+        // One Slice walk over the segments this payload covers (plus the consumed part of the window when it is not exhausted yet).
         sequence.Slice(currentConsumed, destination.Length).CopyTo(destination);
     }
 
@@ -435,6 +451,16 @@ public struct CompatibleReadOnlySequenceReadBuffer : IReadBuffer
     [MethodImpl(MethodImplOptions.NoInlining)]
     void CopyToSlow(scoped Span<byte> destination)
     {
+        // commit an exhausted window first so a CopyTo + Advance loop stays linear, see ReadOnlySequenceReadBuffer.CopyToSlow
+        if (currentConsumed >= currentMemory.Length)
+        {
+            var window = CommitAndReposition();
+            if (window.Length >= destination.Length)
+            {
+                window.Span.Slice(0, destination.Length).CopyTo(destination);
+                return;
+            }
+        }
         sequence.Slice(currentConsumed, destination.Length).CopyTo(destination);
     }
 

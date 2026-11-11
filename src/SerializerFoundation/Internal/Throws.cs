@@ -20,6 +20,10 @@ internal static class Throws
     [DoesNotReturn]
     internal static void InsufficientDataInBuffer() => throw new InvalidOperationException("Insufficient data in buffer.");
 
+    // ToArray on a message longer than the largest array: the segments still hold all of it
+    [DoesNotReturn]
+    internal static void MessageTooLargeForArray() => throw new InvalidOperationException("The written message is too large to copy into a single array. Read it through GetWrittenSegments instead.");
+
     [DoesNotReturn]
     internal static T InsufficientSpaceInBuffer<T>() => throw new InvalidOperationException("Insufficient space in buffer.");
 }
