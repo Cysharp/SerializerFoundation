@@ -16,7 +16,7 @@ dotnet add package SerializerFoundation
 **Library authors: reference the package with `PrivateAssets="none"`.** If your library depends on SerializerFoundation and is itself published as a NuGet package, NuGet's default `PrivateAssets` strips the bundled analyzers from your package's dependency, so your users never get SF001-SF003. Always declare the reference as:
 
 ```xml
-<PackageReference Include="SerializerFoundation" Version="1.1.0" PrivateAssets="none" />
+<PackageReference Include="SerializerFoundation" Version="1.4.0" PrivateAssets="none" />
 ```
 
 Serializers write into an `IWriteBuffer` and read from an `IReadBuffer`. Both are deliberately small.
@@ -288,7 +288,7 @@ public static T Deserialize<T>(in ReadOnlySequence<byte> source)
 }
 ```
 
-Keep one owner for each buffer. A serializer entry point normally constructs it, passes it by `ref` to formatters, and disposes it in `finally`. A `using` local cannot be passed by `ref` (compiler error CS1657), so the entry points below use `try` / `finally`. Caller-provided scratch, input memory and underlying writers are borrowed; disposing a buffer releases its own rented storage or commits its staged writes, without disposing those external resources.
+Keep one owner for each buffer. A serializer entry point normally constructs it, passes it by `ref` to formatters, and disposes it in `finally`. A `using` local cannot be passed by `ref` (compiler error CS1657), so these entry points use `try` / `finally`. Caller-provided scratch, input memory and underlying writers are borrowed; disposing a buffer releases its own rented storage or commits its staged writes, without disposing those external resources.
 
 Async and Streaming Interfaces
 ---
@@ -395,7 +395,7 @@ Beyond the built-in `IWriteBuffer` / `IReadBuffer` implementations, you can prov
 | `IWriteBuffer` | Contract |
 | --- | --- |
 | `BytesWritten` | Total bytes committed through `Advance`. |
-| `GetSpan(sizeHint)` | A writable span of at least `sizeHint` bytes; `0` returns some non-empty span; negative throws `ArgumentOutOfRangeException`. Valid until the next `GetSpan`, `Flush` or `Dispose`. |
+| `GetSpan(sizeHint)` | A writable span of at least `sizeHint` bytes; `0` returns some non-empty span; negative throws `ArgumentOutOfRangeException`. A size the buffer cannot provide throws `InvalidOperationException` when it is out of room, or lets the failed allocation surface when it grows by allocating (`OutOfMemoryException` past the largest possible array). Valid until the next `GetSpan`, `Flush` or `Dispose`. |
 | `Advance(bytesWritten)` | Commits the leading bytes of the last span; negative or beyond the span throws `InvalidOperationException`. The rest of the span stays writable. |
 | `Flush()` | Pushes buffered bytes to the destination when there is one; otherwise a no-op. May invalidate a held span. |
 | `Dispose()` | Commits or releases the buffer's own state. Called once by the owner. |
@@ -479,7 +479,7 @@ public ref struct MyWriter<TBuffer> where TBuffer : struct, IWriteBuffer, allows
 The analyzers ship inside the SerializerFoundation package under `analyzers/dotnet/cs` and require a host compatible with Roslyn 4.3.1 or later. A direct `PackageReference` loads them automatically. Transitive references are different: NuGet's default `PrivateAssets` (`contentfiles;analyzers;build`) writes `exclude="Build,Analyzers"` into the dependency entry of any package that references SerializerFoundation, so applications that only reference that package never load the analyzers. **If you publish a library that depends on SerializerFoundation, always reference it with `PrivateAssets="none"`** so the analyzers reach your users:
 
 ```xml
-<PackageReference Include="SerializerFoundation" Version="1.1.0" PrivateAssets="none" />
+<PackageReference Include="SerializerFoundation" Version="1.4.0" PrivateAssets="none" />
 ```
 
 When importing DLLs manually or through an engine-specific workflow, configure that host to load the analyzer DLL as well.

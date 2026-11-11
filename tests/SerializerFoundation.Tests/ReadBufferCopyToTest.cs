@@ -205,4 +205,93 @@ public class ReadBufferCopyToTest
         }
         finally { buffer.Dispose(); }
     }
+
+    // CopyTo + Advance with no window request in between, the shape of reading fixed-size elements one after
+    // another. Advance never commits, so the CopyTo slow path has to: otherwise the sequence stays parked at the
+    // first window and every copy re-walks all the segments consumed so far (quadratic in the segment count).
+    static void CopyAdvanceLoop<TReadBuffer>(ref TReadBuffer buffer, byte[] data, int elementSize)
+        where TReadBuffer : struct, IReadBuffer, allows ref struct
+    {
+        var destination = new byte[elementSize];
+        var position = 0;
+        while (buffer.BytesRemaining >= elementSize)
+        {
+            buffer.CopyTo(destination);
+            Assert.True(data.AsSpan(position, elementSize).SequenceEqual(destination), $"element at {position}");
+            buffer.Advance(elementSize);
+            position += elementSize;
+            Assert.Equal(position, buffer.BytesConsumed);
+        }
+        Assert.Equal(data.Length % elementSize, buffer.BytesRemaining);
+    }
+
+    [Fact]
+    public void SequenceBuffers_CopyToAdvanceLoop_StaysLinearInTheSegmentCount()
+    {
+        // 200,000 segments of 16 bytes, read as 24-byte elements so every copy straddles a seam.
+        // Linear this takes a few milliseconds; re-walking from the first window took well over ten seconds,
+        // so the generous bound separates the two on any machine without being a timing-sensitive assertion.
+        var data = Ramp(200_000 * 16);
+        var sequence = Split(data, 16);
+        var limit = TimeSpan.FromSeconds(3);
+
+        var stopwatch = System.Diagnostics.Stopwatch.StartNew();
+        var buffer = new ReadOnlySequenceReadBuffer(sequence);
+        try { CopyAdvanceLoop(ref buffer, data, 24); }
+        finally { buffer.Dispose(); }
+        Assert.True(stopwatch.Elapsed < limit, $"ReadOnlySequenceReadBuffer took {stopwatch.Elapsed}");
+
+        stopwatch.Restart();
+        var compatible = new CompatibleReadOnlySequenceReadBuffer(sequence);
+        try { CopyAdvanceLoop(ref compatible, data, 24); }
+        finally { compatible.Dispose(); }
+        Assert.True(stopwatch.Elapsed < limit, $"CompatibleReadOnlySequenceReadBuffer took {stopwatch.Elapsed}");
+    }
+
+    [Fact]
+    public void SequenceBuffers_CopyToThatCommits_KeepsAHeldStitchedSpanValid()
+    {
+        // The CopyTo slow path commits once the window is used up. The interface promises that CopyTo does not
+        // invalidate a held span, so the commit must leave the stitch storage (scratch, or the rented temp) alone.
+        var data = Ramp(64);
+
+        {
+            var buffer = new ReadOnlySequenceReadBuffer(Split(data, 5), stackalloc byte[16]);
+            try
+            {
+                Assert.True(buffer.TryGetSpan(8, out var held)); // stitched into scratch
+                buffer.Advance(8); // the stitched window is used up
+
+                var destination = new byte[20];
+                buffer.CopyTo(destination); // slow path, commits
+                Assert.Equal(data.AsSpan(8, 20).ToArray(), destination);
+                Assert.Equal(data.AsSpan(0, 8).ToArray(), held.Slice(0, 8).ToArray());
+                Assert.Equal(8, buffer.BytesConsumed);
+
+                // the window continues at the cursor
+                Assert.True(data.AsSpan(8).StartsWith(buffer.GetUnreadSpan()));
+                Assert.False(buffer.GetUnreadSpan().IsEmpty);
+            }
+            finally { buffer.Dispose(); }
+        }
+
+        {
+            var buffer = new CompatibleReadOnlySequenceReadBuffer(Split(data, 5));
+            try
+            {
+                Assert.True(buffer.TryGetSpan(8, out var held)); // stitched into the rented temp
+                buffer.Advance(8);
+
+                var destination = new byte[20];
+                buffer.CopyTo(destination);
+                Assert.Equal(data.AsSpan(8, 20).ToArray(), destination);
+                Assert.Equal(data.AsSpan(0, 8).ToArray(), held.Slice(0, 8).ToArray());
+                Assert.Equal(8, buffer.BytesConsumed);
+
+                Assert.True(data.AsSpan(8).StartsWith(buffer.GetUnreadSpan()));
+                Assert.False(buffer.GetUnreadSpan().IsEmpty);
+            }
+            finally { buffer.Dispose(); }
+        }
+    }
 }

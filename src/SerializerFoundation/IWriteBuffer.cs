@@ -19,6 +19,9 @@ public interface IWriteBuffer : IDisposable
     /// Returns a writable span of at least <paramref name="sizeHint"/> bytes.
     /// When <paramref name="sizeHint"/> is 0, some non-empty span is returned.
     /// A negative <paramref name="sizeHint"/> throws <see cref="ArgumentOutOfRangeException"/> instead of being clamped.
+    /// A size the buffer cannot provide throws as well: <see cref="InvalidOperationException"/> when the buffer is out of room
+    /// (a fixed span, or a destination that returns too little), while a buffer that grows by allocating lets the failed
+    /// allocation surface, which is <see cref="OutOfMemoryException"/> for a size past the largest possible array.
     /// The span is valid until the next <see cref="GetSpan"/>, <see cref="Flush"/>, or Dispose call.
     /// </summary>
     Span<byte> GetSpan(int sizeHint = 0);

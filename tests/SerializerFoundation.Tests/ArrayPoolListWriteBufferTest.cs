@@ -106,6 +106,108 @@ public class ArrayPoolListWriteBufferTest
         }
     }
 
+    // A size past Array.MaxLength makes ArrayPool.Rent throw OutOfMemoryException without allocating anything,
+    // which stands in for any Rent that fails on the first spill. The buffer must come out of it untouched:
+    // the segment table used to be rented before the array, and a table without an array made ToArray, WriteTo
+    // and GetWrittenSegments skip everything still sitting in the scratch span.
+    [Fact]
+    public void FailedFirstSpill_LeavesTheScratchContentReadable()
+    {
+        var buffer = new ArrayPoolListWriteBuffer(stackalloc byte[32]);
+        try
+        {
+            var expected = WriteChunks(ref buffer, 20, 7);
+
+            var thrown = false;
+            try { buffer.GetSpan(int.MaxValue); }
+            catch (OutOfMemoryException) { thrown = true; }
+            Assert.True(thrown);
+
+            Assert.Equal(20, buffer.BytesWritten);
+            Assert.Equal(expected, buffer.ToArray());
+
+            var destination = new byte[20];
+            buffer.WriteTo(destination);
+            Assert.Equal(expected, destination);
+
+            var segments = buffer.GetWrittenSegments();
+            Assert.Equal(20, segments.Length);
+            Assert.Equal(1, segments.SegmentCount);
+            Assert.True(segments.TryGetNext(out var segment));
+            Assert.Equal(expected, segment.ToArray());
+            Assert.False(segments.TryGetNext(out _));
+
+            // and it keeps working: the next spill succeeds and keeps the scratch content in front
+            var more = WriteChunks(ref buffer, 100_000, 1000);
+            Assert.Equal(100_020, buffer.BytesWritten);
+            Assert.Equal(expected.Concat(more).ToArray(), buffer.ToArray());
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
+
+    [Fact]
+    public void FailedFirstSpill_WithNothingWritten_HasNoSegments()
+    {
+        var buffer = new ArrayPoolListWriteBuffer(Span<byte>.Empty);
+        try
+        {
+            var thrown = false;
+            try { buffer.GetSpan(int.MaxValue); }
+            catch (OutOfMemoryException) { thrown = true; }
+            Assert.True(thrown);
+
+            Assert.Equal(0, buffer.BytesWritten);
+            Assert.Empty(buffer.ToArray());
+            var segments = buffer.GetWrittenSegments();
+            Assert.Equal(0, segments.Length);
+            Assert.Equal(0, segments.SegmentCount);
+            Assert.False(segments.TryGetNext(out _));
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
+
+    [Fact]
+    public void Compatible_FailedFirstRent_HasNoSegments_AndTheBufferStaysUsable()
+    {
+        var buffer = new CompatibleArrayPoolListWriteBuffer();
+        try
+        {
+            var thrown = false;
+            try { buffer.GetSpan(int.MaxValue); }
+            catch (OutOfMemoryException) { thrown = true; }
+            Assert.True(thrown);
+
+            Assert.Equal(0, buffer.BytesWritten);
+            Assert.Empty(buffer.ToArray());
+            var segments = buffer.GetWrittenSegments();
+            Assert.Equal(0, segments.Length);
+            Assert.Equal(0, segments.SegmentCount);
+            Assert.False(segments.TryGetNext(out _));
+
+            var expected = new byte[70_000];
+            new Random(5).NextBytes(expected);
+            var written = 0;
+            while (written < expected.Length)
+            {
+                var size = Math.Min(777, expected.Length - written);
+                expected.AsSpan(written, size).CopyTo(buffer.GetSpan(size));
+                buffer.Advance(size);
+                written += size;
+            }
+            Assert.Equal(expected, buffer.ToArray());
+        }
+        finally
+        {
+            buffer.Dispose();
+        }
+    }
+
     [Fact]
     public void Compatible_ToArray_WriteTo_BytesWritten_Agree()
     {

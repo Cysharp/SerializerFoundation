@@ -1137,4 +1137,123 @@ public class NonCopyableBufferAnalyzerTest
             """;
         Assert.Empty(await RunAnalyzerAsync(source));
     }
+
+    [Fact]
+    public async Task RefReturningLocalFunction_Silent()
+    {
+        // the return belongs to the local function, not to the by-value method around it:
+        // a ref-returning local function hands out the storage itself
+        const string source = """
+            public class Holder
+            {
+                MyBuffer store;
+                public void Run()
+                {
+                    ref MyBuffer Expression() => ref store;
+                    ref MyBuffer Block() { return ref store; }
+                    Expression().Dispose();
+                    Block().Dispose();
+                }
+            }
+            """;
+        Assert.Empty(await RunAnalyzerAsync(source));
+    }
+
+    [Fact]
+    public async Task ByValueLocalFunctionAndLambdaInsideRefReturningMethod_Report()
+    {
+        // and the other way round: the enclosing method returning by ref does not excuse
+        // a nested function that returns a copy of the field
+        const string source = """
+            public delegate MyBuffer Maker();
+
+            public class Holder
+            {
+                MyBuffer store;
+                public ref MyBuffer Run()
+                {
+                    MyBuffer Copy() => store;
+                    Maker maker = () => store;
+                    Copy().Dispose();
+                    maker().Dispose();
+                    return ref store;
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        Assert.Equal(2, diagnostics.Length);
+        Assert.All(diagnostics, static d => Assert.Contains("returned by value", d.GetMessage()));
+    }
+
+    [Fact]
+    public async Task FreshValueShapes_Silent()
+    {
+        // `new T()` on a type parameter constructs in place, an awaited result is a by-value return,
+        // and a throw arm yields no value at all: none of them reads existing storage
+        const string source = """
+            using System.Threading.Tasks;
+
+            public static class Code
+            {
+                public static void Generic<TBuffer>() where TBuffer : struct, SerializerFoundation.IWriteBuffer
+                {
+                    var created = new TBuffer();
+                    created.Dispose();
+                }
+
+                public static void ThrowArms(bool flag)
+                {
+                    var a = flag ? new MyBuffer() : throw new System.InvalidOperationException();
+                    var b = flag switch { true => new MyBuffer(), false => throw new System.InvalidOperationException() };
+                    a.Dispose();
+                    b.Dispose();
+                }
+
+                static Task<MyBuffer> CreateAsync() => Task.FromResult(new MyBuffer());
+
+                public static async Task Awaited()
+                {
+                    var a = await CreateAsync();
+                    a.Dispose();
+                }
+            }
+            """;
+        Assert.Empty(await RunAnalyzerAsync(source, useRuntime: true));
+    }
+
+    [Fact]
+    public async Task ThrowArmBesideExistingStorage_Reports()
+    {
+        // the throw arm is not a copy, but the other arm still is
+        const string source = """
+            public static class Code
+            {
+                public static void Run(bool flag, ref MyBuffer existing)
+                {
+                    var a = flag ? existing : throw new System.InvalidOperationException();
+                    a.Dispose();
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("copied by assignment", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task IndexerByValueParameter_Reports()
+    {
+        // an indexer's accessors are not ordinary methods, so its parameters are checked with the property
+        const string source = """
+            public class Holder
+            {
+                public int this[MyBuffer buffer] { get { return 0; } }
+                public int this[int index] { get { return index; } }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("received by value", diagnostic.GetMessage());
+        Assert.Equal("buffer", source.Substring(diagnostic.Location.SourceSpan.Start, diagnostic.Location.SourceSpan.Length));
+    }
 }
