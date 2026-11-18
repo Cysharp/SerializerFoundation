@@ -470,14 +470,16 @@ public class NonCopyableBufferAnalyzerTest
         Assert.Contains("readonly reference", diagnostic.GetMessage());
     }
 
+    // the struct holders in this group carry [NonCopyable] because they hold a buffer by value;
+    // these tests are about the readonly-receiver rule, not about the marker
     [Theory]
-    [InlineData("class")]
-    [InlineData("struct")]
-    [InlineData("readonly struct")]
-    public async Task ReadOnlyFieldInDeclaringConstructor_Silent(string kind)
+    [InlineData("public class")]
+    [InlineData("[SerializerFoundation.CodeAnalysis.NonCopyable] public struct")]
+    [InlineData("[SerializerFoundation.CodeAnalysis.NonCopyable] public readonly struct")]
+    public async Task ReadOnlyFieldInDeclaringConstructor_Silent(string declaration)
     {
         var source = $$"""
-            public {{kind}} Holder
+            {{declaration}} Holder
             {
                 readonly MyBuffer buffer;
                 static readonly MyBuffer shared;
@@ -532,6 +534,7 @@ public class NonCopyableBufferAnalyzerTest
     public async Task ReadOnlyStructFieldReceiver_Reports()
     {
         const string source = """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
             public readonly struct Holder
             {
                 readonly MyBuffer buffer;
@@ -547,6 +550,7 @@ public class NonCopyableBufferAnalyzerTest
     public async Task ReadOnlyMemberReceiver_Reports()
     {
         const string source = """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
             public struct Holder
             {
                 MyBuffer buffer;
@@ -593,10 +597,12 @@ public class NonCopyableBufferAnalyzerTest
                 public static void Run(in Holder holder) { holder.buffer.Dispose(); }
             }
             """;
-        // Holder is not a buffer, so its `in` parameter is legal; the buffer inside is still readonly through it
+        // an unmarked Holder is not in the single-owner set, so its `in` parameter is not reported;
+        // the buffer inside is still readonly through it, and the missing marker is reported at the field
         var diagnostics = await RunAnalyzerAsync(source);
-        var diagnostic = Assert.Single(diagnostics);
-        Assert.Contains("readonly reference", diagnostic.GetMessage());
+        Assert.Equal(2, diagnostics.Length);
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("readonly reference"));
+        Assert.Contains(diagnostics, d => d.GetMessage().Contains("held by value"));
     }
 
     [Fact]
@@ -1255,5 +1261,217 @@ public class NonCopyableBufferAnalyzerTest
         var diagnostic = Assert.Single(diagnostics);
         Assert.Contains("received by value", diagnostic.GetMessage());
         Assert.Equal("buffer", source.Substring(diagnostic.Location.SourceSpan.Start, diagnostic.Location.SourceSpan.Length));
+    }
+
+    [Theory]
+    [InlineData("struct")]
+    [InlineData("readonly struct")]
+    [InlineData("ref struct")]
+    [InlineData("record struct")]
+    public async Task UnmarkedStructHoldingBuffer_Reports(string kind)
+    {
+        // a copy of the holder copies the buffer inside it, and no other rule sees that copy
+        // (`var b = a` below stays silent): the holder is outside the single-owner set until it is marked
+        var source = $$"""
+            public {{kind}} Holder
+            {
+                public readonly MyBuffer buffer;
+                public readonly int depth;
+            }
+
+            public static class Code
+            {
+                public static void Run()
+                {
+                    var a = new Holder();
+                    var b = a;
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("'MyBuffer'", diagnostic.GetMessage());
+        Assert.Contains("held by value in 'Holder'", diagnostic.GetMessage());
+        Assert.Equal("buffer", source.Substring(diagnostic.Location.SourceSpan.Start, diagnostic.Location.SourceSpan.Length));
+    }
+
+    [Fact]
+    public async Task UnmarkedGenericStructHoldingBufferTypeParameter_Reports()
+    {
+        // the README's reader/writer shape: the field is a type parameter constrained to a buffer interface.
+        // An unconstrained T is not known to be a buffer and stays silent
+        const string source = """
+            public struct Writer<TBuffer> where TBuffer : struct, SerializerFoundation.IWriteBuffer
+            {
+                TBuffer buffer;
+                int depth;
+            }
+
+            public struct Plain<T> where T : struct
+            {
+                T value;
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("'TBuffer'", diagnostic.GetMessage());
+        Assert.Contains("held by value in 'Writer'", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task UnmarkedStructHoldingMarkedStruct_Reports()
+    {
+        // the marker has to follow the value through every layer of wrapping: the serializer library's reader
+        // is marked, and a user's struct around it is the next place a copy can hide
+        const string source = """
+            public struct MyReader
+            {
+                Reader inner;
+                int depth;
+            }
+
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct MyMarkedReader
+            {
+                Reader inner;
+            }
+            """;
+        var corlib = CompileStub("corlibstub", CorlibStub);
+        var coreLibrary = CompileStub("MessagePack", CoreLibraryStub, corlib);
+        var serializer = CompileStub("Serializer", """
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct Reader
+            {
+                int consumed;
+            }
+            """, corlib, coreLibrary);
+        var compilation = CSharpCompilation.Create(
+            "UserAssembly",
+            [CSharpSyntaxTree.ParseText(source)],
+            [corlib, coreLibrary, serializer],
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        Assert.Empty(compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error));
+        var diagnostics = await compilation.WithAnalyzers([new NonCopyableBufferAnalyzer()]).GetAnalyzerDiagnosticsAsync(CancellationToken.None);
+
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("'Reader'", diagnostic.GetMessage());
+        Assert.Contains("held by value in 'MyReader'", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task SingleOwnerFieldsOutsideUnmarkedStructs_Silent()
+    {
+        // a class instance is reached by reference, a marked struct and a buffer are already single-owner,
+        // and a static field is not part of any instance: none of these can be copied along with a struct
+        const string source = """
+            public class ClassHolder
+            {
+                MyBuffer buffer;
+                static MyBuffer shared;
+            }
+
+            [SerializerFoundation.CodeAnalysis.NonCopyable]
+            public struct MarkedHolder
+            {
+                MyBuffer buffer;
+            }
+
+            public struct OuterBuffer : SerializerFoundation.IWriteBuffer
+            {
+                MyBuffer inner;
+                public void Dispose() { }
+            }
+
+            public struct StaticOnly
+            {
+                static MyBuffer shared;
+                int value;
+            }
+            """;
+        Assert.Empty(await RunAnalyzerAsync(source));
+    }
+
+    [Fact]
+    public async Task AutoPropertyInUnmarkedStruct_ReportsOnce()
+    {
+        // the property is the declaration the author wrote; its implicit backing field is not reported again
+        const string source = """
+            public struct Holder
+            {
+                public MyBuffer Buffer { get; set; }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        var diagnostic = Assert.Single(diagnostics);
+        Assert.Contains("by-value property", diagnostic.GetMessage());
+    }
+
+    [Fact]
+    public async Task CapturedLocalReturnedFromNestedFunction_Reports()
+    {
+        // a captured local outlives the lambda or local function that returns it:
+        // every call hands out a copy while the enclosing function still owns the original
+        const string source = """
+            public delegate MyBuffer Maker();
+
+            public static class Code
+            {
+                public static void Run()
+                {
+                    var a = new MyBuffer();
+                    Maker expression = () => a;
+                    Maker block = () => { return a; };
+                    MyBuffer Local() => a;
+                    Maker nested = () =>
+                    {
+                        var b = new MyBuffer();
+                        Maker inner = () => b;
+                        return inner();
+                    };
+                    expression().Dispose();
+                    block().Dispose();
+                    Local().Dispose();
+                    nested().Dispose();
+                    a.Dispose();
+                }
+            }
+            """;
+        var diagnostics = await RunAnalyzerAsync(source, useRuntime: true);
+        Assert.Equal(4, diagnostics.Length);
+        Assert.All(diagnostics, static d => Assert.Contains("returned by value from a captured local", d.GetMessage()));
+    }
+
+    [Fact]
+    public async Task OwnLocalReturnedFromNestedFunction_Silent()
+    {
+        // the factory move stays legal inside a lambda or local function: the local dies with that function's frame
+        const string source = """
+            public delegate MyBuffer Maker();
+
+            public static class Code
+            {
+                public static void Run()
+                {
+                    Maker lambda = () => { var b = new MyBuffer(); return b; };
+                    MyBuffer Local() { var b = new MyBuffer(); return b; }
+                    Maker nested = () =>
+                    {
+                        Maker inner = () => { var c = new MyBuffer(); return c; };
+                        var d = inner();
+                        return d;
+                    };
+                    lambda().Dispose();
+                    Local().Dispose();
+                    nested().Dispose();
+                }
+
+                public static MyBuffer Create()
+                {
+                    var a = new MyBuffer();
+                    return a;
+                }
+            }
+            """;
+        Assert.Empty(await RunAnalyzerAsync(source, useRuntime: true));
     }
 }

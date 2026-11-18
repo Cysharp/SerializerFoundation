@@ -456,10 +456,10 @@ The package bundles Roslyn analyzers that check the buffer contract at compile t
 | ID | Description |
 | --- | --- |
 | SF001 | `IWriteBuffer` / `IReadBuffer` implementations must be structs. Every consuming API constrains buffers to `struct`, so a class implementation compiles at its declaration and is unusable at every call site. |
-| SF002 | Buffer structs are single-owner and must not be copied. A copy diverges silently (two write indexes over one window) and double-returns pooled arrays at Dispose. |
+| SF002 | Buffer structs are single-owner and must not be copied. A copy diverges silently (two write indexes over one window) and double-returns pooled arrays at Dispose. A struct that holds one by value must be marked `[NonCopyable]`. |
 | SF003 | Virtual methods marked `[RequireOverride]` must be overridden by concrete derived types that can access them. |
 
-SF002 is the one you will meet. Implementing a buffer interface is the non-copyable marker, so buffers need no attribute. A struct that is not a buffer but holds one by value, such as a serializer's reader or writer, opts in with `[NonCopyable]` (`SerializerFoundation.CodeAnalysis`) and is checked by the same rules. The analyzer catches common copy mistakes in serializer code: by-value parameters and extension receivers, `in` / `ref readonly` parameters (the callee mutates a defensive copy), local and field initialization from another buffer, boxing, capture in a tuple or array initializer, `foreach`, pattern matching, `with`, by-value properties, yielding an existing buffer, and mutation through a `readonly` reference. It is a guard against common mistakes, not a complete ownership checker: callers still need to keep buffers single-owner and pass them by `ref`.
+SF002 is the one you will meet. Implementing a buffer interface is the non-copyable marker, so buffers need no attribute. A struct that is not a buffer but holds one by value, such as a serializer's reader or writer, must be marked `[NonCopyable]` (`SerializerFoundation.CodeAnalysis`): a copy of it copies the buffer inside, so SF002 reports a single-owner field in an unmarked struct, and a marked struct is checked by the same rules as a buffer. The requirement repeats at every layer, so a struct that wraps a marked reader or writer is marked as well. Classes need no marker, because an instance is reached by reference. The analyzer catches common copy mistakes in serializer code: by-value parameters and extension receivers, `in` / `ref readonly` parameters (the callee mutates a defensive copy), local and field initialization from another buffer, boxing, capture in a tuple or array initializer, `foreach`, pattern matching, `with`, by-value properties, returning a captured local from a lambda or local function, yielding an existing buffer, and mutation through a `readonly` reference. It is a guard against common mistakes, not a complete ownership checker: callers still need to keep buffers single-owner and pass them by `ref`.
 
 ```csharp
 void ByValue(ArrayPoolListWriteBuffer buffer) { }    // SF002
@@ -472,7 +472,7 @@ var copy = buffer;                                 // SF002: copied by assignmen
 [NonCopyable]
 public ref struct MyWriter<TBuffer> where TBuffer : struct, IWriteBuffer, allows ref struct
 {
-    TBuffer buffer; // a copy of MyWriter would copy the buffer too, so MyWriter follows the same rules
+    TBuffer buffer; // a copy of MyWriter would copy the buffer too: without [NonCopyable] this field is SF002
 }
 ```
 

@@ -14,6 +14,8 @@ namespace SerializerFoundation.Analyzers;
 /// and buffers need no attribute: implementing a buffer interface IS the non-copyable marker,
 /// so the analyzer keys directly on that. SerializerFoundation's own [NonCopyable] covers the one shape the
 /// interfaces cannot see, a struct that is not a buffer but holds one by value (a serializer's reader or writer).
+/// The marker is mandatory there: a single-owner field in an unmarked struct is reported, so the set stays closed
+/// under wrapping instead of depending on each wrapper's author remembering to opt in.
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
@@ -52,7 +54,7 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         "SerializerFoundation.Correctness",
         DiagnosticSeverity.Error, // this must not allow silent divergence of mutable state, so it's an error, not a warning
         isEnabledByDefault: true,
-        description: "Structs implementing IWriteBuffer/IReadBuffer hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Structs marked [NonCopyable] (typically a reader or writer that holds a buffer by value) follow the same rules. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
+        description: "Structs implementing IWriteBuffer/IReadBuffer hold single-owner mutable state (write indexes, rented pool arrays, pinned windows). A copy diverges silently and double-disposes pooled state. Structs marked [NonCopyable] (typically a reader or writer that holds a buffer by value) follow the same rules, and a struct that holds a single-owner field by value must carry the marker: its copies copy the field. Pass buffers by ref (the formatter contract), construct them in place, and never box them. `in` and `ref readonly` parameters count as copies: the buffer's mutating members act on a defensive copy, and so does any non-readonly member called through a readonly field or a ref readonly reference.");
 
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
 
@@ -105,6 +107,9 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             startContext.RegisterSymbolAction(
                 context => AnalyzeProperty(context, types),
                 SymbolKind.Property);
+            startContext.RegisterSymbolAction(
+                context => AnalyzeField(context, types),
+                SymbolKind.Field);
             startContext.RegisterOperationAction(
                 context => AnalyzeReturn(context, types),
                 OperationKind.Return,
@@ -259,18 +264,41 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
         context.ReportDiagnostic(Diagnostic.Create(Rule, location, property.Type.Name, "exposed as a by-value property (use a ref-returning property or a field)"));
     }
 
+    // a struct copies its fields with it, so a struct that holds a single-owner value is single-owner too.
+    // Left unmarked it is invisible to every other rule: `var copy = writer;` duplicates the buffer inside
+    // without a diagnostic, and disposing both returns the pooled arrays twice. Requiring the marker at the
+    // field keeps the protection transitive, whatever the depth of wrapping.
+    // Classes are exempt (an instance is reached by reference, never copied), and so are ref fields and statics.
+    static void AnalyzeField(SymbolAnalysisContext context, NonCopyableTypes types)
+    {
+        var field = (IFieldSymbol)context.Symbol;
+        // an auto-property's backing field is implicit; its by-value property is already reported
+        if (field.IsStatic || field.IsImplicitlyDeclared || field.RefKind != RefKind.None ||
+            field.ContainingType is not { TypeKind: TypeKind.Struct } container ||
+            types.IsNonCopyable(container) ||
+            !types.IsNonCopyable(field.Type))
+        {
+            return;
+        }
+        var location = field.Locations.IsDefaultOrEmpty ? Location.None : field.Locations[0];
+        context.ReportDiagnostic(Diagnostic.Create(Rule, location, field.Type.Name, $"held by value in '{container.Name}', a struct that is not marked [NonCopyable] (copying '{container.Name}' copies its '{field.Name}' field too; mark '{container.Name}' [NonCopyable])"));
+    }
+
     // returning a LOCAL or a fresh value is the factory move (the storage dies with the
     // frame); returning a field, a ref target, or a by-ref parameter duplicates storage
     // that stays alive behind the caller's back. Ref-returning members hand out the
     // storage itself and are exempt. A `using` local is the exception among locals: the
     // frame disposes it on exit, so the caller receives a copy of a dead buffer (and the
-    // pooled state behind it is returned twice).
+    // pooled state behind it is returned twice). A local CAPTURED from an enclosing function
+    // is the other exception: it does not die with the lambda or local function that returns it,
+    // so each call hands out another copy while the enclosing function keeps the original.
     static void AnalyzeReturn(OperationAnalysisContext context, NonCopyableTypes types)
     {
         var returnOperation = (IReturnOperation)context.Operation;
+        var returningMethod = GetReturningMethod(returnOperation, context.ContainingSymbol);
         if (returnOperation.ReturnedValue is not { Type: { } type } value ||
             !types.IsNonCopyable(type) ||
-            GetReturningMethod(returnOperation, context.ContainingSymbol) is { RefKind: not RefKind.None })
+            returningMethod is { RefKind: not RefKind.None })
         {
             return;
         }
@@ -290,8 +318,16 @@ public sealed class NonCopyableBufferAnalyzer : DiagnosticAnalyzer
             context.ReportDiagnostic(Diagnostic.Create(Rule, value.Syntax.GetLocation(), type.Name, "returned from a using local (the local is disposed when the method exits, so the caller gets a copy of a disposed buffer; drop the using and let the caller own it)"));
             return;
         }
+        if (unwrapped is ILocalReferenceOperation { Local: { IsRef: false } local })
+        {
+            // a local belongs to the function that declares it; one declared further out was captured
+            if (returningMethod is not null && !SymbolEqualityComparer.Default.Equals(local.ContainingSymbol, returningMethod))
+            {
+                context.ReportDiagnostic(Diagnostic.Create(Rule, value.Syntax.GetLocation(), type.Name, "returned by value from a captured local (the enclosing function keeps the original, so every call hands out another copy; return a fresh value or return by ref)"));
+            }
+            return;
+        }
         if (IsFreshValue(unwrapped) ||
-            unwrapped is ILocalReferenceOperation { Local.IsRef: false } ||
             unwrapped is IParameterReferenceOperation { Parameter.RefKind: RefKind.None }) // the by-value parameter was already diagnosed at its declaration
         {
             return;
