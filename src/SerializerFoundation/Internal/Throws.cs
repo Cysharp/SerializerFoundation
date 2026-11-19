@@ -24,6 +24,15 @@ internal static class Throws
     [DoesNotReturn]
     internal static void MessageTooLargeForArray() => throw new InvalidOperationException("The written message is too large to copy into a single array. Read it through GetWrittenSegments instead.");
 
+    // a pooled-list write buffer that still holds its segment table after the table went back to the pool,
+    // which only a copy of the buffer can cause: the other copy was disposed
+    [DoesNotReturn]
+    internal static void PooledStorageReturned(string objectName) => throw new ObjectDisposedException(objectName, "The buffer's pooled storage has already been returned. The buffer was copied and one of the copies was disposed.");
+
+    // BufferSegments used after the buffer it was taken from was disposed
+    [DoesNotReturn]
+    internal static void SegmentsOutlivedBuffer() => throw new ObjectDisposedException(nameof(BufferSegments), "The buffer these segments were taken from has been disposed.");
+
     [DoesNotReturn]
     internal static T InsufficientSpaceInBuffer<T>() => throw new InvalidOperationException("Insufficient space in buffer.");
 }
