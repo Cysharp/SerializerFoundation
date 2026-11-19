@@ -12,6 +12,9 @@ namespace SerializerFoundation;
 /// <summary>
 /// An <see cref="IWriteBuffer"/> that writes into an <see cref="IBufferWriter{T}"/> such as PipeWriter or ArrayBufferWriter.
 /// Writes are staged in the writer's current span and committed to the writer on <see cref="Flush"/> or Dispose.
+/// They are also committed whenever the current span is used up, and Dispose commits on a failure path as well,
+/// so a serialization that throws leaves part of the message in the writer. Nothing can take those bytes back:
+/// discard or reset the writer rather than writing the next message after them.
 /// </summary>
 public ref struct BufferWriterWriteBuffer : IWriteBuffer
 {

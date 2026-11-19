@@ -2,6 +2,9 @@
 // Unlike that internal type, however, this is exposed as public API with a long code path,
 // which raises the risk of a double-Return caused by copying the struct.
 // For that reason, we bundle an Analyzer(NonCopyableBufferAnalyzer) that reports an error when a struct implementing IReadBuffer/IWriteBuffer is copied, to prevent this.
+// The analyzer cannot see every copy and is not loaded by every host, so the segment table also carries a generation (see PooledSegments):
+// a copy that is disposed after the other one returns nothing, and its ToArray/WriteTo/GetWrittenSegments and its next spill throw
+// instead of touching a table that may already belong to another message. Writes into the window it still holds are not caught.
 // I hope C# will support ownership as a language feature in the future. https://github.com/dotnet/csharplang/pull/10296
 
 namespace SerializerFoundation;
@@ -20,6 +23,7 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
     int currentWritten;      // bytes written into currentBuffer
     int scratchLength;       // finished length of the scratch span once spilled (pooled != null)
     int pooledCount;         // rented arrays in pooled; the last one is currentBuffer
+    int generation;          // of pooled when it was rented; a mismatch means a copy of this buffer already returned it
     long completedTotal;     // bytes in every finished segment (scratch and pooled), excludes currentWritten
     PooledSegment[]? pooled; // [i].Length = finished length of pooled segment i (i < pooledCount - 1)
 
@@ -76,6 +80,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         if (currentBuffer.Length - currentWritten < sizeHint)
         {
             var segments = pooled;
+            // everything below edits the table, so it has to still be this buffer's own
+            if (segments is not null && !PooledSegments.IsCurrent(segments, generation))
+            {
+                Throws.PooledStorageReturned(nameof(ArrayPoolListWriteBuffer));
+            }
 
             if (pooledCount > 0 && currentWritten == 0)
             {
@@ -100,7 +109,7 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             // GetWrittenSegments read `pooled != null` as "the scratch span is finished", so a table left behind by
             // a spill whose array Rent then threw would make them skip everything still sitting in the scratch span.
             // (If this Rent throws instead, newArray is simply never returned to the pool and the GC collects it.)
-            segments ??= pooled = PooledSegments.Rent();
+            segments ??= pooled = PooledSegments.Rent(out generation);
 
             // finish current segment (the scratch span on the first spill, possibly at length 0)
             if (pooledCount == 0)
@@ -173,6 +182,10 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             scratchBuffer.Slice(0, currentWritten).CopyTo(destination);
             return;
         }
+        if (!PooledSegments.IsCurrent(segments, generation))
+        {
+            Throws.PooledStorageReturned(nameof(ArrayPoolListWriteBuffer));
+        }
 
         // copy scratch buffer
         var scratchLen = scratchLength;
@@ -202,7 +215,8 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         if (segments is not null)
         {
             pooled = null;
-            PooledSegments.Return(segments, pooledCount);
+            // a no-op when a copy of this buffer already returned the table (see PooledSegments)
+            PooledSegments.Return(segments, pooledCount, generation);
         }
         pooledCount = 0;
         scratchLength = 0;
@@ -244,7 +258,11 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
         var segments = pooled;
         if (segments is null)
         {
-            return new BufferSegments(scratchBuffer.Slice(0, currentWritten), null, 0, 0, currentWritten);
+            return new BufferSegments(scratchBuffer.Slice(0, currentWritten), null, 0, 0, 0, currentWritten);
+        }
+        if (!PooledSegments.IsCurrent(segments, generation))
+        {
+            Throws.PooledStorageReturned(nameof(ArrayPoolListWriteBuffer));
         }
 
         // GetSpanSlow never records an empty completed segment, so the only possible empty
@@ -256,7 +274,7 @@ public ref struct ArrayPoolListWriteBuffer : IWriteBuffer, IDisposable
             visiblePooled--;
             lastLength = visiblePooled > 0 ? segments[visiblePooled - 1].Length : 0; // finished length of the new last pooled segment
         }
-        return new BufferSegments(scratchBuffer.Slice(0, scratchLength), segments, visiblePooled, lastLength, BytesWritten);
+        return new BufferSegments(scratchBuffer.Slice(0, scratchLength), segments, visiblePooled, lastLength, generation, BytesWritten);
     }
 }
 
@@ -271,6 +289,7 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
 {
     PooledSegment[]? pooled; // [i].Length = finished length of pooled segment i (i < pooledCount - 1)
     int pooledCount;
+    int generation;       // of pooled when it was rented; a mismatch means a copy of this buffer already returned it
 
     byte[]? currentArray; // == pooled[pooledCount - 1].Array once the first segment is rented
     int currentWritten;
@@ -307,6 +326,11 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         if (array == null || array.Length - currentWritten < sizeHint)
         {
             var segments = pooled;
+            // everything below edits the table (and returns the current array), so it has to still be this buffer's own
+            if (segments is not null && !PooledSegments.IsCurrent(segments, generation))
+            {
+                Throws.PooledStorageReturned(nameof(CompatibleArrayPoolListWriteBuffer));
+            }
 
             if (pooledCount > 0 && currentWritten == 0)
             {
@@ -328,7 +352,7 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
 
             // the segment table is rented together with the first array, and only after it: a table without an
             // array (`pooled != null` with pooledCount == 0) is a state GetWrittenSegments cannot describe, see the ref variant
-            segments ??= pooled = PooledSegments.Rent();
+            segments ??= pooled = PooledSegments.Rent(out generation);
 
             // finish current segment
             if (pooledCount > 0)
@@ -388,6 +412,10 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
     public void WriteTo(scoped Span<byte> destination)
     {
         var segments = pooled;
+        if (segments is not null && !PooledSegments.IsCurrent(segments, generation))
+        {
+            Throws.PooledStorageReturned(nameof(CompatibleArrayPoolListWriteBuffer));
+        }
         for (int i = 0; i < pooledCount; i++)
         {
             ref var segment = ref segments![i];
@@ -407,7 +435,8 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         if (segments is not null)
         {
             pooled = null;
-            PooledSegments.Return(segments, pooledCount);
+            // a no-op when a copy of this buffer already returned the table (see PooledSegments)
+            PooledSegments.Return(segments, pooledCount, generation);
         }
         pooledCount = 0;
         completedTotal = 0;
@@ -450,7 +479,11 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
         var segments = pooled;
         if (segments is null)
         {
-            return new BufferSegments(default, null, 0, 0, 0);
+            return new BufferSegments(default, null, 0, 0, 0, 0);
+        }
+        if (!PooledSegments.IsCurrent(segments, generation))
+        {
+            Throws.PooledStorageReturned(nameof(CompatibleArrayPoolListWriteBuffer));
         }
 
         // drop a freshly rented, still-unwritten tail so every segment is non-empty
@@ -461,6 +494,6 @@ public struct CompatibleArrayPoolListWriteBuffer : IWriteBuffer, IDisposable, IB
             visiblePooled--;
             lastLength = visiblePooled > 0 ? segments[visiblePooled - 1].Length : 0; // finished length of the new last pooled segment
         }
-        return new BufferSegments(default, segments, visiblePooled, lastLength, BytesWritten);
+        return new BufferSegments(default, segments, visiblePooled, lastLength, generation, BytesWritten);
     }
 }

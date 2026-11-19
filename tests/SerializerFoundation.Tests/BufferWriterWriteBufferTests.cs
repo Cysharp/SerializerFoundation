@@ -49,4 +49,54 @@ public class BufferWriterWriteBufferTests
         Assert.Equal(ExpectedBytes(65), inner.WrittenSpan.ToArray());
     }
 
+    [Fact]
+    public void FailurePath_DisposeCommitsWhatWasWritten()
+    {
+        // the documented contract: bytes handed to an IBufferWriter cannot be taken back, and Dispose commits what
+        // is still staged even when the formatter threw, so the writer holds a truncated message afterwards
+        var inner = new ArrayBufferWriter<byte>(16);
+        Assert.Throws<InvalidOperationException>(() => WriteThenFail(inner));
+        Assert.Equal(ExpectedBytes(3), inner.WrittenSpan.ToArray());
+
+        var compatibleInner = new ArrayBufferWriter<byte>(16);
+        Assert.Throws<InvalidOperationException>(() => WriteThenFailCompatible(compatibleInner));
+        Assert.Equal(ExpectedBytes(3), compatibleInner.WrittenSpan.ToArray());
+
+        static void WriteThenFail(IBufferWriter<byte> output)
+        {
+            var b = new BufferWriterWriteBuffer(output);
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    b.GetReference(1) = (byte)i;
+                    b.Advance(1);
+                }
+                throw new InvalidOperationException("formatter failed");
+            }
+            finally
+            {
+                b.Dispose();
+            }
+        }
+
+        static void WriteThenFailCompatible(IBufferWriter<byte> output)
+        {
+            var b = new CompatibleBufferWriterWriteBuffer(output);
+            try
+            {
+                for (int i = 0; i < 3; i++)
+                {
+                    b.GetReference(1) = (byte)i;
+                    b.Advance(1);
+                }
+                throw new InvalidOperationException("formatter failed");
+            }
+            finally
+            {
+                b.Dispose();
+            }
+        }
+    }
+
 }
