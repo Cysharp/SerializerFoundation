@@ -9,6 +9,9 @@
 /// such calls instead of holding on to it.
 /// <see cref="Advance"/> commits the leading bytes and does not invalidate the rest of the span, which stays writable
 /// until one of the calls above.
+/// Bytes that have been handed to an underlying destination cannot be taken back: an implementation may push them
+/// through whenever a window is used up, and <see cref="IDisposable.Dispose"/> may commit what is still staged.
+/// When a sequence of writes fails part-way, treat the destination as holding a truncated message.
 /// </summary>
 public interface IWriteBuffer : IDisposable
 {

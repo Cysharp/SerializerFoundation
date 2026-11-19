@@ -188,6 +188,8 @@ finally
 await pipeWriter.FlushAsync();
 ```
 
+A write into an `IBufferWriter<byte>` cannot be taken back. Staged bytes are committed each time a window fills, and `Dispose` commits whatever is still staged, including when the formatter threw part-way through. After a failed serialization the writer therefore holds a truncated message: discard or reset the writer, or close the connection, instead of writing the next message after it. When the destination must receive either the whole message or nothing, serialize into an `ArrayPoolListWriteBuffer` first and copy it to the destination only on success.
+
 `SerializerFoundation.WriteBufferExtensions.GetReference` is a by-reference shortcut for `GetSpan` with the same contract. For example, an encoder can write a little-endian integer through `Unsafe.WriteUnaligned`:
 
 ```csharp
@@ -398,7 +400,7 @@ Beyond the built-in `IWriteBuffer` / `IReadBuffer` implementations, you can prov
 | `GetSpan(sizeHint)` | A writable span of at least `sizeHint` bytes; `0` returns some non-empty span; negative throws `ArgumentOutOfRangeException`. A size the buffer cannot provide throws `InvalidOperationException` when it is out of room, or lets the failed allocation surface when it grows by allocating (`OutOfMemoryException` past the largest possible array). Valid until the next `GetSpan`, `Flush` or `Dispose`. |
 | `Advance(bytesWritten)` | Commits the leading bytes of the last span; negative or beyond the span throws `InvalidOperationException`. The rest of the span stays writable. |
 | `Flush()` | Pushes buffered bytes to the destination when there is one; otherwise a no-op. May invalidate a held span. |
-| `Dispose()` | Commits or releases the buffer's own state. Called once by the owner. |
+| `Dispose()` | Commits or releases the buffer's own state, on a failure path as well: a buffer that commits to a destination leaves there whatever was written before the failure. Called once by the owner. |
 
 | `IReadBuffer` | Contract |
 | --- | --- |
